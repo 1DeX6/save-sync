@@ -26,9 +26,9 @@
 
 ## Скриншоты
 
-![Веб-интерфейс](web.png)
+![Веб-интерфейс](screenshots/web.png)
 
-![Центр управления](control-panel.jpg)
+![Центр управления](screenshots/control-panel.jpg)
 
 ## Поддерживаемые облака
 
@@ -167,9 +167,9 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 
 ## Screenshots
 
-![Web interface](web.png)
+![Web interface](screenshots/web-en.png)
 
-![Control panel](control-panel.jpg)
+![Control panel](screenshots/control-panel-en.jpg)
 
 ## Supported clouds
 
