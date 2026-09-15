@@ -20,8 +20,8 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 
 ## Screenshots
 
-![Web interface](screenshots/web.png)
-![Control panel](screenshots/control-panel.jpg)
+![Web interface](web.png)
+![Control panel](control-panel.jpg)
 
 *(add your own screenshots here — see the `screenshots/` folder)*
 

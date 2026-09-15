@@ -20,8 +20,8 @@
 
 ## Скриншоты
 
-![Веб-интерфейс](screenshots/web.png)
-![Центр управления](screenshots/control-panel.jpg)
+![Веб-интерфейс](web.png)
+![Центр управления](control-panel.jpg)
 
 *(добавьте свои скриншоты в папку `screenshots/`)*
 
