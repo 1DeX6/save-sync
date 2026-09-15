@@ -21,9 +21,8 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 ## Screenshots
 
 ![Web interface](web.png)
-![Control panel](control-panel.jpg)
 
-*(add your own screenshots here — see the `screenshots/` folder)*
+![Control panel](control-panel.jpg)
 
 ## Supported clouds
 
