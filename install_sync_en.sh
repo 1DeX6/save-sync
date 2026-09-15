@@ -2808,6 +2808,35 @@ show_control_panel() {
 # WEB INTERFACE (IMPROVED, NO EXPORT/IMPORT, NO AUTO-SAVE)
 ############################################
 
+restart_web_if_running() {
+    if [ -f "/tmp/save_sync_web.pid" ] && kill -0 "$(cat /tmp/save_sync_web.pid 2>/dev/null)" 2>/dev/null; then
+        WAS_RUNNING=true
+    elif pgrep -f "python3.*server.py" >/dev/null 2>&1; then
+        WAS_RUNNING=true
+    else
+        WAS_RUNNING=false
+    fi
+
+    if [ "$WAS_RUNNING" = true ]; then
+        echo "🔄 Running web interface detected, restarting with the new version..."
+        STOPPED=false
+        if [ -f "/tmp/save_sync_web.pid" ]; then
+            PID=$(cat /tmp/save_sync_web.pid 2>/dev/null)
+            if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+                kill -9 "$PID" 2>/dev/null
+                STOPPED=true
+            fi
+            rm -f /tmp/save_sync_web.pid
+        fi
+        if [ "$STOPPED" = false ]; then
+            pkill -f "python3.*server.py" 2>/dev/null
+        fi
+        sleep 2
+        bash "$0" --web > /dev/null 2>&1 &
+        echo "✅ Web interface restarted"
+    fi
+}
+
 start_web() {
     echo ""
     echo "══════════════════════════════════════════════════════════"
@@ -5485,6 +5514,8 @@ EOF
         echo "✅ Update to v1.4.4 complete!"
 
         log_msg "Update to v1.4.4 complete"
+
+        restart_web_if_running
 
         echo ""
         echo "What's new:"

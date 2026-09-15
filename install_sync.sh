@@ -2771,7 +2771,9 @@ show_control_panel() {
             12)
                 echo ""
                 echo "🔄 Перезапуск веб-интерфейса..."
-                # Останавливаем старый
+                # Останавливаем старый и запускаем новый безусловно
+                # (в отличие от restart_web_if_running, этот пункт меню
+                # всегда перезапускает, даже если процесс почему-то не найден)
                 STOPPED=false
                 if [ -f "/tmp/save_sync_web.pid" ]; then
                     PID=$(cat /tmp/save_sync_web.pid 2>/dev/null)
@@ -2807,6 +2809,35 @@ show_control_panel() {
 ############################################
 # ВЕБ-ИНТЕРФЕЙС (УЛУЧШЕННЫЙ, БЕЗ ЭКСПОРТА/ИМПОРТА И БЕЗ АВТОСОХРАНЕНИЯ)
 ############################################
+
+restart_web_if_running() {
+    if [ -f "/tmp/save_sync_web.pid" ] && kill -0 "$(cat /tmp/save_sync_web.pid 2>/dev/null)" 2>/dev/null; then
+        WAS_RUNNING=true
+    elif pgrep -f "python3.*server.py" >/dev/null 2>&1; then
+        WAS_RUNNING=true
+    else
+        WAS_RUNNING=false
+    fi
+
+    if [ "$WAS_RUNNING" = true ]; then
+        echo "🔄 Обнаружен работающий веб-интерфейс, перезапускаю с новой версией..."
+        STOPPED=false
+        if [ -f "/tmp/save_sync_web.pid" ]; then
+            PID=$(cat /tmp/save_sync_web.pid 2>/dev/null)
+            if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+                kill -9 "$PID" 2>/dev/null
+                STOPPED=true
+            fi
+            rm -f /tmp/save_sync_web.pid
+        fi
+        if [ "$STOPPED" = false ]; then
+            pkill -f "python3.*server.py" 2>/dev/null
+        fi
+        sleep 2
+        bash "$0" --web > /dev/null 2>&1 &
+        echo "✅ Веб-интерфейс перезапущен"
+    fi
+}
 
 start_web() {
     echo ""
@@ -5485,6 +5516,8 @@ EOF
         echo "✅ Обновление до v1.4.4 завершено!"
 
         log_msg "Обновление до v1.4.4 завершено"
+
+        restart_web_if_running
 
         echo ""
         echo "Что нового:"
