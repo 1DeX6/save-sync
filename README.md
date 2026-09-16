@@ -8,8 +8,6 @@
 
 <p align="center"><i>Синхронизация сохранений · Копирование и загрузка ромов · Без ПК</i></p>
 
-# Save Sync
-
 ![Version](https://img.shields.io/badge/version-1.4.4-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Batocera%20%7C%20KNULLI%20%7C%20Recalbox-orange)
