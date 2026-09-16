@@ -30,6 +30,17 @@
 - Резервное копирование и восстановление ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет на устройстве
 - Работает и с одним устройством — как автоматический бэкап сохранений
 
+## Как работает синхронизация
+
+**Включили устройство** — забирает из облака все сохранения. Если играли на другом устройстве, прогресс уже будет здесь.
+
+**Вышли из игры** — отправляет новые и изменённые сохранения в облако в фоне.
+
+**Удалили сохранение** — при следующем выходе из игры оно удалится из облака, а при включении другого устройства удалится и там.
+
+> **Важно:** не запускайте одну и ту же игру на двух устройствах одновременно. Если выйти из игры на обоих, в облаке останется сохранение с того устройства, которое вышло последним — предыдущее будет потеряно.
+
+
 ## Скриншоты
 
 ![Веб-интерфейс](screenshots/web.png)
@@ -204,6 +215,16 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 - Deletions sync too — remove a save on one device, it disappears from the cloud and from your other device as well
 - Optional ROM backup and restore — upload your ROM collection to the cloud, or pull down ROMs (and whole systems) you don't have locally yet
 - Works for a single device too — it doubles as an automatic save backup even if you never touch a second device
+
+## How syncing works
+
+**Turn on a device** — it pulls all saves from the cloud. If you played on another device, that progress is already here.
+
+**Exit a game** — pushes new and changed saves to the cloud in the background.
+
+**Delete a save** — it's removed from the cloud on the next game exit, and from other devices the next time they boot.
+
+> **Important:** don't run the same game on two devices at the same time. If you exit on both, the cloud keeps whichever device's save was pushed last — the other one is lost.
 
 ## Screenshots
 
