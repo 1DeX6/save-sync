@@ -176,7 +176,7 @@ Recalbox:
 **Можно другое облако?**
 Да, если оно работает через WebDAV — при установке выберите пункт «Nextcloud/OwnCloud/другой WebDAV» и введите свой адрес сервера.
 
-## Лицензия / благодарности
+##
 
 Синхронизация построена поверх [rclone](https://rclone.org/), который и делает всю работу по передаче данных через WebDAV.
 
@@ -361,7 +361,7 @@ Launch the game once, exit, and reopen it — the emulator will pick up the file
 **Can I use a different cloud provider?**
 Yes, if it speaks WebDAV — pick the "Nextcloud/ownCloud/other WebDAV" option during setup and enter your own server URL.
 
-## License / Credits
+##
 
 Built on top of [rclone](https://rclone.org/) for the actual WebDAV transfer work.
 
