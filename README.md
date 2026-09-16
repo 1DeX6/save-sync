@@ -92,8 +92,6 @@ Recalbox:
 /recalbox/share/system/install_sync.sh --config
 ```
 
-> Просто `install_sync.sh --config` без пути работать не будет — система не знает, где искать файл, если вы не находитесь ровно в этой папке. Указывайте полный путь, как выше.
-
 Всё через меню: ручная синхронизация, исключение систем из синхронизации, копирование и загрузка ромов, интервал синхронизации, количество попыток, статистика и логи, полная диагностика, перезапуск веб-интерфейса.
 
 ## Веб-интерфейс
@@ -247,8 +245,6 @@ Recalbox:
 ```bash
 /recalbox/share/system/install_sync.sh --config
 ```
-
-> Just `install_sync.sh --config` without the path won't work — the shell has no way to find the file unless you're standing in that exact folder. Use the full path as shown above.
 
 Everything is menu-driven from here: manual sync, excluding specific systems from save sync, ROM backup/restore, sync interval, retry count, statistics and logs, full diagnostics, and restarting the web interface.
 
