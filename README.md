@@ -133,17 +133,32 @@ Recalbox:
 **Нужен ли постоянный интернет?**
 Только ненадолго — при включении устройства и при выходе из игры. Всё остальное время можно играть офлайн, сохранения синхронизируются при следующем подключении к сети.
 
+**Сколько времени занимает синхронизация?**
+Зависит от размера файлов и скорости интернета. Крупные сохранения (1–4 МБ) могут идти несколько минут. После игры с тяжёлыми сохранениями не выключайте устройство сразу — дайте немного времени. То же самое при загрузке: большие сохранения подтягиваются не мгновенно.
+
+**Что такое интервал синхронизации?**
+Минимальное время между синхронизациями. Например, если установить 5 минут, синхронизация при выходе из игры выполнится, только если с предыдущей прошло больше 5 минут — это помогает не перегружать облако при частых выходах из игры.
+
 **Зачем исключать систему из синхронизации?**
-Некоторые системы (MAME, Final Burn Neo) создают крупные сохранения, которые не обязательно держать в облаке. Исключить можно через центр управления или веб-интерфейс.
+Исключение ускоряет синхронизацию и экономит трафик. Некоторые системы (MAME, Final Burn Neo) создают крупные сохранения, которые не обязательно держать в облаке. Исключить можно через центр управления или веб-интерфейс.
 
 **Как добавить ромы без кард-ридера и FTP?**
 Закиньте их в `GameROMs/<система>/` в облаке, затем запустите загрузку ромов с устройства — они появятся в нужных папках сами.
 
+**Что именно делает "Копирование и загрузка ромов"?**
+Это не двусторонняя синхронизация, а резервное копирование и восстановление по отдельности. Выгрузка отправляет ромы в облако (создаёт копию), загрузка — забирает их обратно (восстанавливает на устройстве). При выгрузке файлы, которых больше нет на устройстве, удаляются и из облачной копии.
+
 **Удалил сохранение, а в облаке осталось?**
-Исчезнет при следующем выходе из игры (это и запускает синхронизацию), либо сразу — если зайти в любую игру и выйти, чтобы вызвать синхронизацию принудительно.
+Исчезнет при следующем выходе из игры (это и запускает синхронизацию) — а когда включите другое устройство, удалится и там. Если хотите синхронизировать сразу, зайдите в любую игру и выйдите, чтобы вызвать синхронизацию принудительно.
 
 **Сохранение есть, но игра не продолжается с этого места?**
 Некоторые эмуляторы (MAME, Final Burn Neo) не подгружают сохранение автоматически при запуске — загрузите вручную горячими клавишами (обычно Select + кнопка).
+
+**Загружается не тот слот сохранения?**
+В каждом устройстве свой счётчик слотов. Если на одном сохранение в слоте 3, а на другом — в слоте 2, по горячим клавишам загрузится последний использованный слот именно на этом устройстве. Найдите нужное через менеджер сохранений — либо скопируйте сохранение в свободный слот и загрузите оттуда.
+
+**Внутриигровые сохранения не видны?**
+Запустите игру один раз, выйдите и зайдите снова — эмулятор подхватит файл.
 
 **Можно другое облако?**
 Да, если оно работает через WebDAV — при установке выберите пункт «Nextcloud/OwnCloud/другой WebDAV» и введите свой адрес сервера.
@@ -293,17 +308,32 @@ Yep, works between any number of devices in any combination — it's not paired,
 **Do I need a constant internet connection?**
 Only briefly, at boot and when exiting a game. Play offline the rest of the time; saves sync automatically once you're back online.
 
+**How long does syncing take?**
+Depends on file size and connection speed. Larger saves (1–4 MB) can take a few minutes. Don't power off right after a session with heavy saves — give it a moment. Same on download: big saves don't pull down instantly.
+
+**What's the sync interval?**
+The minimum time between syncs. Set it to 5 minutes, for example, and a sync on game exit only actually runs if more than 5 minutes have passed since the last one — keeps frequent game-exits from hammering your cloud storage.
+
 **Why exclude a system from sync?**
-Some systems (MAME, FinalBurn Neo) produce large save files you may not want cluttering your cloud storage. Exclude them from the control panel or web UI.
+Excluding a system speeds up sync and saves bandwidth. Some systems (MAME, FinalBurn Neo) produce large save files you may not want cluttering your cloud storage. Exclude them from the control panel or web UI.
 
 **Can I add ROMs without a card reader or FTP access?**
 Drop them into `GameROMs/<system>/` in your cloud storage, then run a ROM download from the device — they'll land in the right folders automatically.
 
+**What does "ROM backup and restore" actually do?**
+It's not a two-way sync — upload and download are separate, one-directional operations. Upload pushes your ROMs to the cloud as a backup copy; download pulls them back down to restore on a device. On upload, files no longer present locally are removed from the cloud copy too.
+
 **Deleted a save but it's still in the cloud?**
-It disappears on the next game exit (which triggers a sync), or immediately if you launch and quit any game to force one.
+It disappears on the next game exit (which triggers a sync) — and from other devices too, the next time they boot. Launch and quit any game to force a sync right away if you don't want to wait.
 
 **A save exists but the game doesn't resume from it?**
 Some emulators (MAME, FinalBurn Neo) don't auto-load saves on launch — load manually with the in-game hotkey (usually Select + a face button).
+
+**Wrong save slot loads?**
+Each device keeps its own slot counter. If one device has your save in slot 3 and another in slot 2, the hotkey loads whichever slot was last used *on that device*. Find the right one via the save manager, or copy the save into an empty slot and load from there.
+
+**In-game saves aren't showing up?**
+Launch the game once, exit, and reopen it — the emulator will pick up the file on the next run.
 
 **Can I use a different cloud provider?**
 Yes, if it speaks WebDAV — pick the "Nextcloud/ownCloud/other WebDAV" option during setup and enter your own server URL.
