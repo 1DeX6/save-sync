@@ -25,7 +25,7 @@
 - Автоматически синхронизирует сохранения с облаком по протоколу **WebDAV** (через [rclone](https://rclone.org/))
 - Синхронизация при включении устройства (забирает свежие сохранения) и при выходе из игры (отправляет новые/изменённые)
 - Удаление тоже синхронизируется — удалили сохранение на одном устройстве, оно исчезнет из облака и с других устройств
-- Резервное копирование и восстановление ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет на устройстве
+- Копирование и загрузка ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет на устройстве
 - Работает и с одним устройством — как автоматический бэкап сохранений
 
 ## Как работает синхронизация
@@ -62,10 +62,6 @@
 ## Установка
 
 **1. Скопируйте `install_sync.sh` на устройство**
-
-> Если вам удобнее английский интерфейс — используйте `install_sync_en.sh`
-> из того же релиза. Перед запуском переименуйте его в `install_sync.sh`,
-> иначе скрипт не найдёт сам себя при автозагрузке.
 
 Проще всего — через сетевую папку:
 ```
@@ -176,9 +172,11 @@ Recalbox:
 **Можно другое облако?**
 Да, если оно работает через WebDAV — при установке выберите пункт «Nextcloud/OwnCloud/другой WebDAV» и введите свой адрес сервера.
 
-##
+## Лицензия / благодарности
 
 Синхронизация построена поверх [rclone](https://rclone.org/), который и делает всю работу по передаче данных через WebDAV.
+
+MIT — см. [LICENSE](LICENSE).
 
 Багрепорты и предложения — через Issues / Pull Requests.
 
@@ -247,10 +245,6 @@ Yandex, Mail.ru, and Fastmail require an **app password** rather than your regul
 ## Installation
 
 **1. Copy `install_sync.sh` onto your device**
-
-> Prefer the English interface? Use `install_sync_en.sh` from the same
-> release. Rename it to `install_sync.sh` before running — otherwise the
-> script won't find itself on autostart.
 
 Easiest way — over the network:
 ```
@@ -361,8 +355,10 @@ Launch the game once, exit, and reopen it — the emulator will pick up the file
 **Can I use a different cloud provider?**
 Yes, if it speaks WebDAV — pick the "Nextcloud/ownCloud/other WebDAV" option during setup and enter your own server URL.
 
-##
+## License / Credits
 
 Built on top of [rclone](https://rclone.org/) for the actual WebDAV transfer work.
+
+MIT — see [LICENSE](LICENSE).
 
 Contributions, bug reports, and feature requests are welcome via Issues / Pull Requests.
