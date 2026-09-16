@@ -63,6 +63,10 @@
 
 **1. Скопируйте `install_sync.sh` на устройство**
 
+> Если вам удобнее английский интерфейс — используйте `install_sync_en.sh`
+> из того же релиза. Перед запуском переименуйте его в `install_sync.sh`,
+> иначе скрипт не найдёт сам себя при автозагрузке.
+
 Проще всего — через сетевую папку:
 ```
 \\batocera\share\system\   (Batocera)
@@ -245,6 +249,10 @@ Yandex, Mail.ru, and Fastmail require an **app password** rather than your regul
 ## Installation
 
 **1. Copy `install_sync.sh` onto your device**
+
+> Prefer the English interface? Use `install_sync_en.sh` from the same
+> release. Rename it to `install_sync.sh` before running — otherwise the
+> script won't find itself on autostart.
 
 Easiest way — over the network:
 ```
