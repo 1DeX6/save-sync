@@ -68,7 +68,9 @@
 Проще всего — через сетевую папку:
 
 \\batocera\share\system\   (Batocera)
+
 \\knulli\share\system\     (KNULLI)
+
 \\recalbox\share\system\   (Recalbox)
 
 Или через FTP (логин `root`, пароль `linux` для Batocera/KNULLI, `recalboxroot` для Recalbox), в папку `system/`.
@@ -253,7 +255,9 @@ The English build is shipped as `install_sync_en.sh`. If you downloaded that one
 Easiest way — over the network:
 
 \\batocera\share\system\   (Batocera)
+
 \\knulli\share\system\     (KNULLI)
+
 \\recalbox\share\system\   (Recalbox)
 
 Or via FTP (login `root`, password `linux` for Batocera/KNULLI, `recalboxroot` for Recalbox), into the `system/` folder.
