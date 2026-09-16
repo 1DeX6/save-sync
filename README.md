@@ -1,7 +1,7 @@
 <a name="top"></a>
 
 <p align="center">
-  <img src="screenshots/save-logo.png" width="320" alt="Save Sync logo">
+  <img src="screenshots/save-logo.png" width="420" alt="Save Sync logo">
 </p>
 
 <h1 align="center">Save Sync</h1>
@@ -187,7 +187,7 @@ MIT — см. [LICENSE](LICENSE).
 <a name="english"></a>
 
 <p align="center">
-  <img src="screenshots/save-logo.png" width="320" alt="Save Sync logo">
+  <img src="screenshots/save-logo.png" width="420" alt="Save Sync logo">
 </p>
 
 <h1 align="center">Save Sync</h1>
