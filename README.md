@@ -63,9 +63,7 @@
 
 **1. Скопируйте `install_sync.sh` на устройство**
 
-> Английская версия скрипта называется `install_sync_en.sh`. Если
-> скачали её — переименуйте файл в `install_sync.sh` перед запуском.
-> Автозагрузка ищет скрипт именно под этим именем.
+Английская версия скрипта называется `install_sync_en.sh`. Если скачали её — переименуйте файл в `install_sync.sh` перед запуском.
 
 Проще всего — через сетевую папку:
 ...
@@ -250,9 +248,7 @@ Yandex, Mail.ru, and Fastmail require an **app password** rather than your regul
 
 **1. Copy `install_sync.sh` onto your device**
 
-> The English build is shipped as `install_sync_en.sh`. If you downloaded
-> that one, rename it to `install_sync.sh` before running — autostart looks
-> for the script under that exact name.
+The English build is shipped as `install_sync_en.sh`. If you downloaded that one, rename it to `install_sync.sh` before running.
 
 Easiest way — over the network:
 ...
