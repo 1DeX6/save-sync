@@ -92,6 +92,8 @@ Recalbox:
 /recalbox/share/system/install_sync.sh --config
 ```
 
+> Просто `install_sync.sh --config` без пути работать не будет — система не знает, где искать файл, если вы не находитесь ровно в этой папке. Указывайте полный путь, как выше.
+
 Всё через меню: ручная синхронизация, исключение систем из синхронизации, копирование и загрузка ромов, интервал синхронизации, количество попыток, статистика и логи, полная диагностика, перезапуск веб-интерфейса.
 
 ## Веб-интерфейс
@@ -121,8 +123,8 @@ Recalbox:
 **Будет ли работать на других системах?**
 Сейчас — Batocera, KNULLI, Recalbox. Если хотите поддержку другой прошивки — заведите issue, посмотрю, что можно сделать.
 
-**Можно синхронизировать несколько устройств одной и той же прошивки (например, три KNULLI-портатива), без единого Batocera?**
-Да, без ограничений. Синхронизация идёт не «устройство ↔ устройство», а «устройство ↔ облако» — каждое устройство независимо забирает/отправляет файлы в один и тот же облачный аккаунт. Платформа, число устройств и их сочетание не имеют значения: хоть три KNULLI и ноль Batocera, хоть наоборот, хоть вперемешку.
+**Можно синхронизировать несколько устройств с одной и той же прошивкой — например, три портатива на KNULLI?**
+Да, работает с любым числом устройств в любом сочетании — они не «спарены» друг с другом, а просто используют одну общую папку в облаке. Каждое устройство независимо забирает файлы при включении и отправляет при выходе из игры. Три KNULLI-портатива без единого Batocera — совершенно нормальная конфигурация, как и любая смесь платформ (KNULLI + Batocera + Recalbox одновременно). Устройства никогда не общаются друг с другом напрямую — они просто используют один и тот же облачный аккаунт.
 
 **Нужен ли постоянный интернет?**
 Только ненадолго — при включении устройства и при выходе из игры. Всё остальное время можно играть офлайн, сохранения синхронизируются при следующем подключении к сети.
@@ -246,6 +248,8 @@ Recalbox:
 /recalbox/share/system/install_sync.sh --config
 ```
 
+> Just `install_sync.sh --config` without the path won't work — the shell has no way to find the file unless you're standing in that exact folder. Use the full path as shown above.
+
 Everything is menu-driven from here: manual sync, excluding specific systems from save sync, ROM backup/restore, sync interval, retry count, statistics and logs, full diagnostics, and restarting the web interface.
 
 ## Web interface
@@ -275,8 +279,8 @@ Checks rclone version, cloud connectivity, script permissions, config values, fr
 **Will this work on other systems?**
 Currently Batocera, KNULLI, and Recalbox. Open an issue if you'd like another CFW supported — happy to look into it.
 
-**Can I sync multiple devices running the same CFW (say, three KNULLI handhelds), with no Batocera involved at all?**
-Yes, no restrictions there. Sync is device-to-cloud, not device-to-device — each device independently pulls/pushes to the same cloud account. Platform, device count, and combination don't matter: three KNULLI and zero Batocera works exactly the same as any other mix.
+**Can I sync multiple devices running the same CFW — say, three KNULLI handhelds?**
+Yep, works between any number of devices in any combination — it's not paired, it's all through one shared cloud folder. Every device pulls on boot and pushes on game exit, independently. Three KNULLI handhelds with no Batocera anywhere is a totally valid setup, same as a mixed one (KNULLI + Batocera + Recalbox together). They never talk to each other directly — they just share the same cloud account.
 
 **Do I need a constant internet connection?**
 Only briefly, at boot and when exiting a game. Play offline the rest of the time; saves sync automatically once you're back online.
