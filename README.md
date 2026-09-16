@@ -180,8 +180,6 @@ Recalbox:
 
 Синхронизация построена поверх [rclone](https://rclone.org/), который и делает всю работу по передаче данных через WebDAV.
 
-MIT — см. [LICENSE](LICENSE).
-
 Багрепорты и предложения — через Issues / Pull Requests.
 
 ---
@@ -366,7 +364,5 @@ Yes, if it speaks WebDAV — pick the "Nextcloud/ownCloud/other WebDAV" option d
 ## License / Credits
 
 Built on top of [rclone](https://rclone.org/) for the actual WebDAV transfer work.
-
-MIT — see [LICENSE](LICENSE).
 
 Contributions, bug reports, and feature requests are welcome via Issues / Pull Requests.
