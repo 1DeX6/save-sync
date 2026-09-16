@@ -6,8 +6,6 @@
 
 <h1 align="center">Save Sync</h1>
 
-<p align="center"><i>Синхронизация сохранений · Копирование и загрузка ромов · Без ПК</i></p>
-
 ![Version](https://img.shields.io/badge/version-1.4.4-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Batocera%20%7C%20KNULLI%20%7C%20Recalbox-orange)
@@ -191,8 +189,6 @@ MIT — см. [LICENSE](LICENSE).
 </p>
 
 <h1 align="center">Save Sync</h1>
-
-<p align="center"><i>Sync saves · Copy and download ROMs · No PC required</i></p>
 
 ![Version](https://img.shields.io/badge/version-1.4.4-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
