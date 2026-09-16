@@ -22,7 +22,7 @@
 - Синхронизация при включении устройства (забирает свежие сохранения) и при выходе из игры (отправляет новые/изменённые)
 - Удаление тоже синхронизируется — удалили сохранение на одном устройстве, оно исчезнет из облака и с других устройств
 - Резервное копирование и восстановление ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет на устройстве
-- Работает и с одним-единственным устройством — тогда это просто автоматический бэкап сохранений
+- Работает и с одним устройством — как автоматический бэкап сохранений
 
 ## Скриншоты
 
@@ -83,9 +83,16 @@ chmod +x /recalbox/share/system/install_sync.sh
 
 ## Центр управления
 
+Batocera / KNULLI:
 ```bash
-install_sync.sh --config
+/userdata/system/install_sync.sh --config
 ```
+Recalbox:
+```bash
+/recalbox/share/system/install_sync.sh --config
+```
+
+> Просто `install_sync.sh --config` без пути работать не будет — система не знает, где искать файл, если вы не находитесь ровно в этой папке. Указывайте полный путь, как выше.
 
 Всё через меню: ручная синхронизация, исключение систем из синхронизации, копирование и загрузка ромов, интервал синхронизации, количество попыток, статистика и логи, полная диагностика, перезапуск веб-интерфейса.
 
@@ -101,8 +108,13 @@ http://IP_АДРЕС_УСТРОЙСТВА:8080
 
 ## Диагностика
 
+Batocera / KNULLI:
 ```bash
-install_sync.sh --info
+/userdata/system/install_sync.sh --info
+```
+Recalbox:
+```bash
+/recalbox/share/system/install_sync.sh --info
 ```
 Проверка версии rclone, подключения к облаку, прав на скрипты, значений конфига, свободного места (локально и в облаке), состояния интернета, последних записей лога — всё в одном месте.
 
@@ -110,6 +122,9 @@ install_sync.sh --info
 
 **Будет ли работать на других системах?**
 Сейчас — Batocera, KNULLI, Recalbox. Если хотите поддержку другой прошивки — заведите issue, посмотрю, что можно сделать.
+
+**Можно синхронизировать несколько устройств одной и той же прошивки (например, три KNULLI-портатива), без единого Batocera?**
+Да, без ограничений. Синхронизация идёт не «устройство ↔ устройство», а «устройство ↔ облако» — каждое устройство независимо забирает/отправляет файлы в один и тот же облачный аккаунт. Платформа, число устройств и их сочетание не имеют значения: хоть три KNULLI и ноль Batocera, хоть наоборот, хоть вперемешку.
 
 **Нужен ли постоянный интернет?**
 Только ненадолго — при включении устройства и при выходе из игры. Всё остальное время можно играть офлайн, сохранения синхронизируются при следующем подключении к сети.
@@ -224,9 +239,16 @@ chmod +x /recalbox/share/system/install_sync.sh
 
 ## Control panel
 
+Batocera / KNULLI:
 ```bash
-install_sync.sh --config
+/userdata/system/install_sync.sh --config
 ```
+Recalbox:
+```bash
+/recalbox/share/system/install_sync.sh --config
+```
+
+> Just `install_sync.sh --config` without the path won't work — the shell has no way to find the file unless you're standing in that exact folder. Use the full path as shown above.
 
 Everything is menu-driven from here: manual sync, excluding specific systems from save sync, ROM backup/restore, sync interval, retry count, statistics and logs, full diagnostics, and restarting the web interface.
 
@@ -242,8 +264,13 @@ It's plain HTTP with no certificate — your browser may flag it as "not secure.
 
 ## Diagnostics
 
+Batocera / KNULLI:
 ```bash
-install_sync.sh --info
+/userdata/system/install_sync.sh --info
+```
+Recalbox:
+```bash
+/recalbox/share/system/install_sync.sh --info
 ```
 Checks rclone version, cloud connectivity, script permissions, config values, free space (local and cloud), internet status, and recent log entries — all in one place.
 
@@ -251,6 +278,9 @@ Checks rclone version, cloud connectivity, script permissions, config values, fr
 
 **Will this work on other systems?**
 Currently Batocera, KNULLI, and Recalbox. Open an issue if you'd like another CFW supported — happy to look into it.
+
+**Can I sync multiple devices running the same CFW (say, three KNULLI handhelds), with no Batocera involved at all?**
+Yes, no restrictions there. Sync is device-to-cloud, not device-to-device — each device independently pulls/pushes to the same cloud account. Platform, device count, and combination don't matter: three KNULLI and zero Batocera works exactly the same as any other mix.
 
 **Do I need a constant internet connection?**
 Only briefly, at boot and when exiting a game. Play offline the rest of the time; saves sync automatically once you're back online.
