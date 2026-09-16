@@ -66,11 +66,11 @@
 Английская версия скрипта называется `install_sync_en.sh`. Если скачали её — переименуйте файл в `install_sync.sh` перед запуском.
 
 Проще всего — через сетевую папку:
-...
+
 \\batocera\share\system\   (Batocera)
 \\knulli\share\system\     (KNULLI)
 \\recalbox\share\system\   (Recalbox)
-```
+
 Или через FTP (логин `root`, пароль `linux` для Batocera/KNULLI, `recalboxroot` для Recalbox), в папку `system/`.
 
 **2. Подключитесь по SSH**
@@ -248,14 +248,14 @@ Yandex, Mail.ru, and Fastmail require an **app password** rather than your regul
 
 **1. Copy `install_sync.sh` onto your device**
 
-The English build is shipped as `install_sync_en.sh`. If you downloaded that one, rename it to `install_sync.sh` before running.
+The English build is shipped as `install_sync_en.sh`. If you downloaded that one, rename it to `install_sync.sh` before running.h
 
 Easiest way — over the network:
-...
+
 \\batocera\share\system\   (Batocera)
 \\knulli\share\system\     (KNULLI)
 \\recalbox\share\system\   (Recalbox)
-```
+
 Or via FTP (login `root`, password `linux` for Batocera/KNULLI, `recalboxroot` for Recalbox), into the `system/` folder.
 
 **2. SSH into the device**
