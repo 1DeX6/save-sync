@@ -25,7 +25,7 @@
 - Автоматически синхронизирует сохранения с облаком по протоколу **WebDAV** (через [rclone](https://rclone.org/))
 - Синхронизация при включении устройства (забирает свежие сохранения) и при выходе из игры (отправляет новые/изменённые)
 - Удаление тоже синхронизируется — удалили сохранение на одном устройстве, оно исчезнет из облака и с других устройств
-- Копирование и загрузка ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет на устройстве
+- Резервное копирование и восстановление ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет на устройстве
 - Работает и с одним устройством — как автоматический бэкап сохранений
 
 ## Как работает синхронизация
@@ -63,16 +63,16 @@
 
 **1. Скопируйте `install_sync.sh` на устройство**
 
-Английская версия скрипта называется `install_sync_en.sh`. Если скачали её — переименуйте файл в `install_sync.sh` перед запуском.
+> Если вам удобнее английский интерфейс — используйте `install_sync_en.sh`
+> из того же релиза. Перед запуском переименуйте его в `install_sync.sh`,
+> иначе скрипт не найдёт сам себя при автозагрузке.
 
 Проще всего — через сетевую папку:
-
+```
 \\batocera\share\system\   (Batocera)
-
 \\knulli\share\system\     (KNULLI)
-
 \\recalbox\share\system\   (Recalbox)
-
+```
 Или через FTP (логин `root`, пароль `linux` для Batocera/KNULLI, `recalboxroot` для Recalbox), в папку `system/`.
 
 **2. Подключитесь по SSH**
@@ -176,11 +176,9 @@ Recalbox:
 **Можно другое облако?**
 Да, если оно работает через WebDAV — при установке выберите пункт «Nextcloud/OwnCloud/другой WebDAV» и введите свой адрес сервера.
 
-## Лицензия / благодарности
+##
 
 Синхронизация построена поверх [rclone](https://rclone.org/), который и делает всю работу по передаче данных через WebDAV.
-
-MIT — см. [LICENSE](LICENSE).
 
 Багрепорты и предложения — через Issues / Pull Requests.
 
@@ -213,7 +211,7 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 - Automatically syncs your save files to the cloud over **WebDAV**, using [rclone](https://rclone.org/) under the hood
 - Syncs on boot (pulls the latest saves) and on game exit (pushes new/changed saves)
 - Deletions sync too — remove a save on one device, it disappears from the cloud and from your other device as well
-- ROM copy and download — upload your collection to the cloud, or pull ROMs (and whole systems) from there that you don't have locally yet
+- Optional ROM backup and restore — upload your ROM collection to the cloud, or pull down ROMs (and whole systems) you don't have locally yet
 - Works for a single device too — it doubles as an automatic save backup even if you never touch a second device
 
 ## How syncing works
@@ -250,16 +248,16 @@ Yandex, Mail.ru, and Fastmail require an **app password** rather than your regul
 
 **1. Copy `install_sync.sh` onto your device**
 
-The English build is shipped as `install_sync_en.sh`. If you downloaded that one, rename it to `install_sync.sh` before running.h
+> Prefer the English interface? Use `install_sync_en.sh` from the same
+> release. Rename it to `install_sync.sh` before running — otherwise the
+> script won't find itself on autostart.
 
 Easiest way — over the network:
-
+```
 \\batocera\share\system\   (Batocera)
-
 \\knulli\share\system\     (KNULLI)
-
 \\recalbox\share\system\   (Recalbox)
-
+```
 Or via FTP (login `root`, password `linux` for Batocera/KNULLI, `recalboxroot` for Recalbox), into the `system/` folder.
 
 **2. SSH into the device**
@@ -363,10 +361,8 @@ Launch the game once, exit, and reopen it — the emulator will pick up the file
 **Can I use a different cloud provider?**
 Yes, if it speaks WebDAV — pick the "Nextcloud/ownCloud/other WebDAV" option during setup and enter your own server URL.
 
-## License / Credits
+##
 
 Built on top of [rclone](https://rclone.org/) for the actual WebDAV transfer work.
-
-MIT — see [LICENSE](LICENSE).
 
 Contributions, bug reports, and feature requests are welcome via Issues / Pull Requests.
