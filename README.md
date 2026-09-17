@@ -11,7 +11,7 @@
 
 **RU** · [English below ↓](#english)
 
-Облачная синхронизация сохранений и резервное копирование ромов для ретро-приставок и портативок на **Batocera**, **KNULLI** и **Recalbox**.
+Облачная синхронизация сохранений, копирование и загрузка ромов для ретро-приставок и портативок на **Batocera**, **KNULLI** и **Recalbox**.
 
 Сохранились на одном устройстве — включили другое — продолжаете с того же места. Работает в фоне, не мешает игровому процессу. Управлять можно как с самого устройства (через меню в SSH), так и через веб-интерфейс в браузере.
 
@@ -235,7 +235,7 @@ sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 
 **EN** · [Русский выше ↑](#top)
 
-Cloud save synchronization and ROM backup for retro gaming handhelds and consoles running **Batocera**, **KNULLI**, or **Recalbox**.
+Cloud save synchronization, ROM copying and downloading for retro gaming handhelds and consoles running **Batocera**, **KNULLI**, or **Recalbox**.
 
 Save on one device, turn on another, keep playing from where you left off. Runs quietly in the background — no interruption to your gaming session. Manage everything from the device itself or from a browser on your phone/PC.
 
