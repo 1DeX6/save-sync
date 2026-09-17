@@ -13,7 +13,7 @@
 
 Облачная синхронизация сохранений и резервное копирование ромов для ретро-приставок и портативок на **Batocera**, **KNULLI** и **Recalbox**.
 
-Сохранились на одном устройстве — включили другое — продолжаете с того же места. Работает в фоне, не мешает игровому процессу. Управлять можно как с самого устройства, так и через веб-интерфейс в браузере.
+Сохранились на одном устройстве — включили другое — продолжаете с того же места. Работает в фоне, не мешает игровому процессу. Управлять можно как с самого устройства (через меню в SSH), так и через веб-интерфейс в браузере.
 
 *Проверено: Batocera 43.1, Recalbox 10.0.8, KNULLI Scarab*
 
@@ -133,6 +133,45 @@ Recalbox:
 /recalbox/share/system/install_sync.sh --info
 ```
 Проверка версии rclone, подключения к облаку, прав на скрипты, значений конфига, свободного места (локально и в облаке), состояния интернета, последних записей лога — всё в одном месте.
+
+## Создаваемые файлы
+
+В системной папке устройства создаются:
+
+- `install_sync.sh` — установщик / центр управления
+- `download_sync.sh`, `upload_sync.sh` — загрузка и выгрузка сохранений
+- `download_roms.sh`, `upload_roms.sh` — загрузка и выгрузка ромов
+- `sync.conf` — основной конфиг
+- `roms_filter_sync` — фильтр ромов
+- `bin/rclone` — сам rclone
+- `.config/rclone/rclone.conf` — конфиг облака
+- `logs/save_sync.log` — лог синхронизации
+
+Также добавляется хук выхода из игры (запускает выгрузку сохранений) и строка запуска в файл автозагрузки системы (`custom.sh` или `services/custom_service`).
+
+## Удаление
+
+Batocera / KNULLI:
+```bash
+rm -f /userdata/system/download_sync.sh /userdata/system/upload_sync.sh \
+      /userdata/system/download_roms.sh /userdata/system/upload_roms.sh \
+      /userdata/system/sync.conf /userdata/system/roms_filter_sync \
+      /userdata/system/scripts/save-sync.sh /userdata/system/logs/save_sync.log \
+      /userdata/system/.config/rclone/rclone.conf /userdata/system/bin/rclone
+sed -i '/download_sync.sh/d' /userdata/system/custom.sh 2>/dev/null
+```
+
+Recalbox:
+```bash
+rm -f /recalbox/share/system/download_sync.sh /recalbox/share/system/upload_sync.sh \
+      /recalbox/share/system/download_roms.sh /recalbox/share/system/upload_roms.sh \
+      /recalbox/share/system/sync.conf /recalbox/share/system/roms_filter_sync \
+      /recalbox/share/system/logs/save_sync.log \
+      /recalbox/share/system/.config/rclone/rclone.conf /recalbox/share/system/bin/rclone \
+      "/recalbox/share/userscripts/save-sync[endgame].sh"
+sed -i '/download_sync.sh/d' /recalbox/share/system/custom.sh 2>/dev/null
+sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
+```
 
 ## Частые вопросы
 
@@ -317,6 +356,45 @@ Recalbox:
 /recalbox/share/system/install_sync.sh --info
 ```
 Checks rclone version, cloud connectivity, script permissions, config values, free space (local and cloud), internet status, and recent log entries — all in one place.
+
+## Files created
+
+Inside the device's system folder, the script creates:
+
+- `install_sync.sh` — installer / control panel
+- `download_sync.sh`, `upload_sync.sh` — save download/upload
+- `download_roms.sh`, `upload_roms.sh` — ROM download/upload
+- `sync.conf` — main config
+- `roms_filter_sync` — ROM filter
+- `bin/rclone` — rclone itself
+- `.config/rclone/rclone.conf` — cloud config
+- `logs/save_sync.log` — sync log
+
+It also adds a game-exit hook (triggers the save upload) and a startup line to the system's autostart file (`custom.sh` or `services/custom_service`).
+
+## Uninstall
+
+Batocera / KNULLI:
+```bash
+rm -f /userdata/system/download_sync.sh /userdata/system/upload_sync.sh \
+      /userdata/system/download_roms.sh /userdata/system/upload_roms.sh \
+      /userdata/system/sync.conf /userdata/system/roms_filter_sync \
+      /userdata/system/scripts/save-sync.sh /userdata/system/logs/save_sync.log \
+      /userdata/system/.config/rclone/rclone.conf /userdata/system/bin/rclone
+sed -i '/download_sync.sh/d' /userdata/system/custom.sh 2>/dev/null
+```
+
+Recalbox:
+```bash
+rm -f /recalbox/share/system/download_sync.sh /recalbox/share/system/upload_sync.sh \
+      /recalbox/share/system/download_roms.sh /recalbox/share/system/upload_roms.sh \
+      /recalbox/share/system/sync.conf /recalbox/share/system/roms_filter_sync \
+      /recalbox/share/system/logs/save_sync.log \
+      /recalbox/share/system/.config/rclone/rclone.conf /recalbox/share/system/bin/rclone \
+      "/recalbox/share/userscripts/save-sync[endgame].sh"
+sed -i '/download_sync.sh/d' /recalbox/share/system/custom.sh 2>/dev/null
+sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
+```
 
 ## FAQ
 
