@@ -26,6 +26,7 @@
 - Удаление тоже синхронизируется — удалили сохранение на одном устройстве, оно исчезнет из облака и с других устройств
 - Копирование и загрузка ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет на устройстве
 - Работает и с одним устройством — как автоматический бэкап сохранений
+- Не нужно постоянно включённое устройство: не требуется, чтобы оба девайса были онлайн одновременно, и не нужен отдельный сервер или NAS — только обычный облачный WebDAV-аккаунт
 
 ## Как работает синхронизация
 
@@ -214,9 +215,6 @@ sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 **Можно другое облако?**
 Да, если оно работает через WebDAV — при установке выберите пункт «Nextcloud/OwnCloud/другой WebDAV» и введите свой адрес сервера.
 
-**Почему облако, а не P2P или свой сервер?**
-Инструменты вроде Syncthing (P2P) или RomM (веб-приложение на своём сервере) — отличные, и я не пытаюсь их заменить, это просто другой подход. P2P-синхронизации нужно, чтобы оба устройства были онлайн одновременно (либо третий постоянно включённый узел). Своему серверу нужен отдельный постоянно работающий хост — NAS или сервер. Save Sync избегает обоих ограничений: он просто обращается к облачному WebDAV-аккаунту — без постоянно включённого устройства, без требования быть в одной сети или онлайн одновременно.
-
 ## Благодарности
 
 Синхронизация построена поверх [rclone](https://rclone.org/), который и делает всю работу по передаче данных через WebDAV.
@@ -253,6 +251,7 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 - Deletions sync too — remove a save on one device, it disappears from the cloud and from your other device as well
 - ROM copying and downloading — upload your collection to the cloud, or pull down ROMs (and whole systems) you don't have locally yet
 - Works for a single device too — it doubles as an automatic save backup even if you never touch a second device
+- No always-on device needed: your devices don't have to be online at the same time, and there's no dedicated server or NAS to run — just a regular cloud WebDAV account
 
 ## How syncing works
 
@@ -439,9 +438,6 @@ Launch the game once, exit, and reopen it — the emulator will pick up the file
 
 **Can I use a different cloud provider?**
 Yes, if it speaks WebDAV — pick the "Nextcloud/ownCloud/other WebDAV" option during setup and enter your own server URL.
-
-**Why cloud instead of P2P or a self-hosted server?**
-Tools like Syncthing (P2P) or RomM (a self-hosted web app) are great, and I'm not trying to replace them — it's just a different approach. P2P sync needs both devices online at the same time, or a third always-on device acting as a relay. A self-hosted server needs a dedicated host — a NAS or server — running all the time. Save Sync avoids both: it just talks to a WebDAV cloud account, with no always-on device and no requirement to be on the same network or online at the same time.
 
 ## Credits
 
