@@ -26,6 +26,7 @@
 - Удаление тоже синхронизируется — стёрли сохранение на одном, оно исчезнет из облака и с остальных
 - Копирование и загрузка ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет локально
 - Не нужно постоянно включённое устройство: не требуется, чтобы оба девайса были онлайн одновременно, и не нужен отдельный сервер или NAS — только обычный облачный WebDAV-аккаунт
+- Работает с любым числом устройств в любом сочетании систем
 
 ## Как работает синхронизация
 
@@ -178,9 +179,6 @@ sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 **Будет ли работать на других системах?**
 Сейчас — Batocera, KNULLI, Recalbox. Если хотите поддержку другой прошивки — заведите issue, посмотрю, что можно сделать.
 
-**Можно синхронизировать несколько устройств с одной и той же прошивкой — например, три устройства на KNULLI?**
-Да, работает с любым числом устройств в любом сочетании — они не «спарены» друг с другом, а просто используют одну общую папку в облаке. Каждое устройство независимо забирает файлы при включении и отправляет при выходе из игры. Три устройства на KNULLI — совершенно нормальная конфигурация, как и любая смесь платформ (KNULLI + Batocera + Recalbox одновременно). Устройства никогда не общаются друг с другом напрямую — они просто используют один и тот же облачный аккаунт.
-
 **Нужен ли постоянный интернет?**
 Только ненадолго — при включении устройства и при выходе из игры. Всё остальное время можно играть офлайн, сохранения синхронизируются при следующем подключении к сети.
 
@@ -250,6 +248,7 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 - Deletions sync too — remove a save in one place, and it's gone from the cloud and everywhere else
 - ROM copying and downloading — upload your collection to the cloud, or pull down ROMs (and whole systems) you don't have locally yet
 - No always-on device needed: your devices don't have to be online at the same time, and there's no dedicated server or NAS to run — just a regular cloud WebDAV account
+- Works with any number of devices, in any mix of systems
 
 ## How syncing works
 
@@ -400,9 +399,6 @@ sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 
 **Will this work on other systems?**
 Currently Batocera, KNULLI, and Recalbox. Open an issue if you'd like another CFW supported — happy to look into it.
-
-**Can I sync multiple devices running the same CFW — say, three KNULLI handhelds?**
-Yep, works between any number of devices in any combination — it's not paired, it's all through one shared cloud folder. Every device pulls on boot and pushes on game exit, independently. Three KNULLI handhelds with no Batocera anywhere is a totally valid setup, same as a mixed one (KNULLI + Batocera + Recalbox together). They never talk to each other directly — they just share the same cloud account.
 
 **Do I need a constant internet connection?**
 Only briefly, at boot and when exiting a game. Play offline the rest of the time; saves sync automatically once you're back online.
