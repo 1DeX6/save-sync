@@ -22,10 +22,9 @@
 ## Что умеет
 
 - Автоматически синхронизирует сохранения с облаком по протоколу **WebDAV** (через [rclone](https://rclone.org/))
-- Синхронизация при включении устройства (забирает свежие сохранения) и при выходе из игры (отправляет новые/изменённые)
-- Удаление тоже синхронизируется — удалили сохранение на одном устройстве, оно исчезнет из облака и с других устройств
-- Копирование и загрузка ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет на устройстве
-- Подходит и для работы с одним устройством
+- Синхронизация при включении (забирает свежие сохранения) и при выходе из игры (отправляет новые/изменённые)
+- Удаление тоже синхронизируется — стёрли сохранение на одном, оно исчезнет из облака и с остальных
+- Копирование и загрузка ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет локально
 - Не нужно постоянно включённое устройство: не требуется, чтобы оба девайса были онлайн одновременно, и не нужен отдельный сервер или NAS — только обычный облачный WebDAV-аккаунт
 
 ## Как работает синхронизация
@@ -248,9 +247,8 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 
 - Automatically syncs your save files to the cloud over **WebDAV**, using [rclone](https://rclone.org/) under the hood
 - Syncs on boot (pulls the latest saves) and on game exit (pushes new/changed saves)
-- Deletions sync too — remove a save on one device, it disappears from the cloud and from your other device as well
+- Deletions sync too — remove a save in one place, and it's gone from the cloud and everywhere else
 - ROM copying and downloading — upload your collection to the cloud, or pull down ROMs (and whole systems) you don't have locally yet
-- Works for a single device too
 - No always-on device needed: your devices don't have to be online at the same time, and there's no dedicated server or NAS to run — just a regular cloud WebDAV account
 
 ## How syncing works
