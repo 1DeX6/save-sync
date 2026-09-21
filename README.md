@@ -25,7 +25,7 @@
 - Синхронизация при включении устройства (забирает свежие сохранения) и при выходе из игры (отправляет новые/изменённые)
 - Удаление тоже синхронизируется — удалили сохранение на одном устройстве, оно исчезнет из облака и с других устройств
 - Копирование и загрузка ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет на устройстве
-- Работает и с одним устройством — как автоматический бэкап сохранений
+- Подходит и для работы с одним устройством
 - Не нужно постоянно включённое устройство: не требуется, чтобы оба девайса были онлайн одновременно, и не нужен отдельный сервер или NAS — только обычный облачный WebDAV-аккаунт
 
 ## Как работает синхронизация
@@ -250,7 +250,7 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 - Syncs on boot (pulls the latest saves) and on game exit (pushes new/changed saves)
 - Deletions sync too — remove a save on one device, it disappears from the cloud and from your other device as well
 - ROM copying and downloading — upload your collection to the cloud, or pull down ROMs (and whole systems) you don't have locally yet
-- Works for a single device too — it doubles as an automatic save backup even if you never touch a second device
+- Works for a single device too
 - No always-on device needed: your devices don't have to be online at the same time, and there's no dedicated server or NAS to run — just a regular cloud WebDAV account
 
 ## How syncing works
