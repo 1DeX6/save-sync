@@ -22,9 +22,9 @@
 ## Что умеет
 
 - Автоматически синхронизирует сохранения с облаком по протоколу **WebDAV** (через [rclone](https://rclone.org/))
-- Синхронизация при включении и при выходе из игры, всегда в обе стороны: изменённое сохранение выгружается в облако, изменённое на других устройствах загружается в память
+- Синхронизация при включении и при выходе из игры, всегда в обе стороны: сохранения, изменённые на этом устройстве, уходят в облако, а изменённые на других устройствах скачиваются на это
 - Удаление тоже синхронизируется — стёрли сохранение на одном устройстве, оно исчезнет из облака и удалится с остальных устройств
-- Можно играть на нескольких устройствах сразу: прогресс не перезаписывается вслепую, а если одно и то же сохранение изменили на разных устройствах, остаётся более новая версия, а более старую можно хранить копией в GameSaves_conflicts (по умолчанию 3 дня, можно выключить)
+- Можно играть на нескольких устройствах сразу: прогресс не перезаписывается вслепую, а если одно и то же сохранение изменили на разных устройствах, остаётся более новая версия, а более старую можно хранить копией в `GameSaves_conflicts` (по умолчанию 3 дня, можно выключить)
 - Сохранения только тех систем, в которые играют на этом устройстве: если для системы здесь нет игр, её сохранения не скачиваются и не занимают место
 - Сохранения портов PortMaster синхронизируются автоматически — только сами сохранения, без данных игры и настроек экрана
 - Копирование и загрузка ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет локально
@@ -303,7 +303,7 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 - Automatically syncs your save files to the cloud over **WebDAV**, using [rclone](https://rclone.org/) under the hood
 - Syncs on boot and on game exit, always both ways: a changed save is uploaded to the cloud, and saves changed on other devices are downloaded to the device
 - Deletions sync too — delete a save on one device, and it disappears from the cloud and is removed from your other devices
-- Play on several devices at once: progress is never blindly overwritten, and if the same save was changed on different devices, the newer version is kept and the older one can be stored as a copy in GameSaves_conflicts (3 days by default, can be turned off)
+- Play on several devices at once: progress is never blindly overwritten, and if the same save was changed on different devices, the newer version is kept and the older one can be stored as a copy in `GameSaves_conflicts` (3 days by default, can be turned off)
 - Saves only for the systems you actually play on this device: if there are no games for a system here, its saves are not downloaded and take no space
 - PortMaster port saves sync automatically — only the saves themselves, not game data or screen settings
 - ROM copying and downloading — upload your collection to the cloud, or pull down ROMs (and whole systems) you don't have locally yet
