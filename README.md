@@ -144,8 +144,6 @@ http://IP_АДРЕС_УСТРОЙСТВА:8080
 
 В статистике синхронизации делятся на три группы: без изменений, с изменениями и с ошибкой.
 
-Работает по обычному HTTP без сертификата — браузер может пометить страницу как «Не защищено». Это ожидаемо и не страшно в пределах домашней сети — настоящий SSL-сертификат не имеет смысла для устройства с локальным IP.
-
 ## Загрузка ромов по публичной ссылке
 
 Вставьте ссылку на папку или файл — Save Sync покажет, что внутри, а вы выберете нужное и систему, куда класть. Поддерживаются **Яндекс.Диск**, **pCloud**, **Nextcloud / ownCloud** (в том числе со ссылками на подпапки и с паролем) и **archive.org**.
@@ -420,8 +418,6 @@ http://YOUR_DEVICE_IP:8080
 It mirrors every feature in the control panel — sync, ROM management, link downloads, exclusions, live progress, statistics, logs — from any browser on the same network. (If it doesn't come up right away after a fresh install, restart it from the control panel or just reboot the device.)
 
 Statistics split syncs into three groups: without changes, with changes, and with errors.
-
-It's plain HTTP with no certificate — your browser may flag it as "not secure." That's expected and not a concern on a local home network; a real TLS certificate wouldn't make sense for a device with a local IP address anyway.
 
 ## Downloading ROMs from a public link
 
