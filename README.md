@@ -58,9 +58,9 @@
 
 ![Веб-интерфейс](screenshots/web.png)
 
-![Центр управления](screenshots/control-panel.jpg)
-
 ![Вкладка «Ромы» в веб-интерфейсе](screenshots/web-rom.jpg)
+
+![Центр управления](screenshots/control-panel.jpg)
 
 ## Поддерживаемые облака
 
@@ -299,10 +299,10 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 ## What it does
 
 - Automatically syncs your save files to the cloud over **WebDAV**, using [rclone](https://rclone.org/) under the hood
-- Syncs on boot and on game exit, always both ways: a changed save is uploaded to the cloud, and saves changed on other devices are downloaded to the device
+- Syncs on boot and on game exit, always both ways: a save changed on one device is uploaded to the cloud and downloaded to your other devices
 - Deletions sync too — delete a save on one device, and it disappears from the cloud and is removed from your other devices
 - Play on several devices at once: progress is never blindly overwritten, and if the same save was changed on different devices, the newer version is kept and the older one can be stored as a copy in `GameSaves_conflicts` (3 days by default, can be turned off)
-- Saves only for the systems you actually play on this device: if there are no games for a system here, its saves are not downloaded and take no space
+- Only the saves of systems whose ROMs are on the device are downloaded to it. For other systems the saves stay in the cloud and take no space on the device
 - PortMaster port saves sync automatically — only the saves themselves, not game data or screen settings
 - ROM copying and downloading — upload your collection to the cloud, or pull down ROMs (and whole systems) you don't have locally yet
 - Download ROMs from a public link (Yandex Disk, pCloud, Nextcloud / ownCloud, archive.org) — straight to the device or the cloud: pick individual files and folders, take just the games you want out of a zip, unpack .zip / .7z / .rar
@@ -335,9 +335,9 @@ On every sync the device and the cloud are compared with how things looked last 
 
 ![Web interface](screenshots/web-en.png)
 
-![Control panel](screenshots/control-panel-en.jpg)
-
 ![ROMs tab in the web interface](screenshots/web-rom-en.jpg)
+
+![Control panel](screenshots/control-panel-en.jpg)
 
 ## Supported clouds
 
