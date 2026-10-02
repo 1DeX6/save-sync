@@ -22,7 +22,7 @@
 ## Что умеет
 
 - Автоматически синхронизирует сохранения с облаком по протоколу **WebDAV** (через [rclone](https://rclone.org/))
-- Синхронизация при включении и при выходе из игры, всегда в обе стороны: сохранения, изменённые на этом устройстве, уходят в облако, а изменённые на других устройствах скачиваются на это
+- Синхронизация при включении и при выходе из игры, всегда в обе стороны: сохранение, изменённое на одном устройстве, уходит в облако и скачивается на остальные
 - Удаление тоже синхронизируется — стёрли сохранение на одном устройстве, оно исчезнет из облака и удалится с остальных устройств
 - Можно играть на нескольких устройствах сразу: прогресс не перезаписывается вслепую, а если одно и то же сохранение изменили на разных устройствах, остаётся более новая версия, а более старую можно хранить копией в `GameSaves_conflicts` (по умолчанию 3 дня, можно выключить)
 - На устройство скачиваются только сохранения тех систем, ромы которых здесь есть. Для остальных систем сохранения остаются в облаке и не занимают место на устройстве
@@ -38,11 +38,9 @@
 
 | Что произошло | Что будет |
 |---|---|
-| Сохранение изменили на этом устройстве | новая версия уходит в облако |
-| Сохранение изменили на другом устройстве | новая версия скачивается на это устройство |
-| Сохранение удалили на этом устройстве | оно удаляется из облака, а затем и с других устройств |
-| Сохранение удалили на другом устройстве | оно удаляется и с этого устройства |
-| Сохранение изменили и на этом, и на другом устройстве | остаётся более новая версия |
+| Сохранение изменили на одном устройстве | новая версия уходит в облако и скачивается на остальные устройства |
+| Сохранение удалили на одном устройстве | оно удаляется из облака и с остальных устройств |
+| Сохранение изменили на разных устройствах | остаётся более новая версия |
 
 **Включили устройство** — забирает сохранения, изменённые на других устройствах. Если играли на другом, прогресс уже будет здесь.
 
@@ -317,11 +315,9 @@ On every sync the device and the cloud are compared with how things looked last 
 
 | What happened | What happens next |
 |---|---|
-| A save was changed on this device | the new version is uploaded to the cloud |
-| A save was changed on another device | the new version is downloaded to this device |
-| A save was deleted on this device | it is deleted from the cloud, and then from your other devices |
-| A save was deleted on another device | it is deleted from this device too |
-| A save was changed on both this and another device | the newer version is kept |
+| A save was changed on one device | the new version is uploaded to the cloud and downloaded to your other devices |
+| A save was deleted on one device | it is deleted from the cloud and from your other devices |
+| A save was changed on different devices | the newer version is kept |
 
 **Turn on a device** — it pulls saves changed on other devices. If you played on another one, that progress is already here.
 
