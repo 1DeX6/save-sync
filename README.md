@@ -60,9 +60,9 @@
 
 ![Веб-интерфейс](screenshots/web.png)
 
-![Центр управления](screenshots/control-panel.jpg)
-
 ![Вкладка «Ромы» в веб-интерфейсе](screenshots/web-rom.jpg)
+
+![Центр управления](screenshots/control-panel.jpg)
 
 ## Поддерживаемые облака
 
@@ -339,9 +339,9 @@ On every sync the device and the cloud are compared with how things looked last 
 
 ![Web interface](screenshots/web-en.png)
 
-![Control panel](screenshots/control-panel-en.jpg)
-
 ![ROMs tab in the web interface](screenshots/web-rom-en.jpg)
+
+![Control panel](screenshots/control-panel-en.jpg)
 
 ## Supported clouds
 
