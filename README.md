@@ -6,7 +6,7 @@
 
 <h1 align="center">Save Sync</h1>
 
-![Version](https://img.shields.io/badge/version-1.4.4-blue)
+![Version](https://img.shields.io/badge/version-1.4.5-blue)
 ![Platform](https://img.shields.io/badge/platform-Batocera%20%7C%20KNULLI%20%7C%20Recalbox-orange)
 
 **RU** · [English below ↓](#english)
@@ -15,35 +15,54 @@
 
 Сохранились на одном устройстве — включили другое — продолжаете с того же места. Работает в фоне, не мешает игровому процессу. Управлять можно как с самого устройства (через меню в SSH), так и через веб-интерфейс в браузере.
 
-*Проверено: Batocera 43.1, Recalbox 10.0.8, KNULLI Scarab*
+*Проверено: Batocera 43.1, Recalbox 10.1.1, KNULLI Scarab*
 
 ---
 
 ## Что умеет
 
 - Автоматически синхронизирует сохранения с облаком по протоколу **WebDAV** (через [rclone](https://rclone.org/))
-- Синхронизация при включении (забирает свежие сохранения) и при выходе из игры (отправляет новые/изменённые)
+- Синхронизация при включении и при выходе из игры, всегда в обе стороны: изменённое здесь уходит в облако, изменённое на других устройствах приходит сюда
 - Удаление тоже синхронизируется — стёрли сохранение на одном, оно исчезнет из облака и с остальных
+- Можно играть на нескольких устройствах сразу: чужой прогресс не перезаписывается вслепую, а если одно и то же сохранение изменили на разных устройствах, остаётся более новая версия, а более старую можно хранить копией в `GameSaves_conflicts` (по умолчанию 3 дня, можно выключить)
+- Сохранения только тех систем, в которые играют на этом устройстве: если для системы здесь нет игр, её сохранения не скачиваются и не занимают место
+- Сохранения портов PortMaster синхронизируются автоматически — только сами сохранения, без данных игры и настроек экрана
 - Копирование и загрузка ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет локально
+- Загрузка ромов по публичной ссылке (Яндекс.Диск, pCloud, Nextcloud / ownCloud, archive.org) — сразу на устройство или в облако: можно выбрать отдельные файлы и папки, взять нужные игры из zip-архива, распаковать .zip / .7z / .rar
 - Не нужно постоянно включённое устройство: не требуется, чтобы оба девайса были онлайн одновременно, и не нужен отдельный сервер или NAS — только обычный облачный WebDAV-аккаунт
 - Работает с любым числом устройств в любом сочетании систем
 
 ## Как работает синхронизация
 
-**Включили устройство** — забирает из облака все сохранения. Если играли на другом устройстве, прогресс уже будет здесь.
+При каждой синхронизации устройство и облако сравниваются с тем, как всё выглядело в прошлый раз, и переносится только то, что изменилось:
 
-**Вышли из игры** — отправляет новые и изменённые сохранения в облако в фоне.
+| Что произошло | Результат |
+|---|---|
+| Изменено здесь | отправляется в облако |
+| Изменено на другом устройстве | скачивается сюда |
+| Удалено здесь | удаляется из облака |
+| Удалено на другом устройстве | удаляется здесь |
+| Изменено и здесь, и на другом устройстве | остаётся более новая версия |
 
-**Удалили сохранение** — при следующем выходе из игры оно удалится из облака, а при включении другого устройства удалится и там.
+**Включили устройство** — забирает сохранения, изменённые на других устройствах. Если играли на другом, прогресс уже будет здесь.
 
-> **Важно:** не запускайте одну и ту же игру на двух устройствах одновременно. Если выйти из игры на обоих, в облаке останется сохранение с того устройства, которое вышло последним — предыдущее будет потеряно.
+**Вышли из игры** — отправляет то, что изменилось на этом устройстве, и заодно забирает изменённое на других.
 
+**Удалили сохранение** — при следующей синхронизации (например, при выходе из игры) оно удалится из облака, а на других устройствах — при их следующей синхронизации.
+
+**Одно и то же сохранение изменили на разных устройствах** — остаётся более новая версия, а более старую можно хранить копией в папке `GameSaves_conflicts` в облаке, с именем устройства и датой, например `snes/Zelda.srm.KNULLI-3f2a.2026-09-27_18-40-00`. Ничего спрашивать не будет, в лог попадёт строка о конфликте. Сколько дней хранить такие копии, задаётся в настройке «Копии при конфликтах» (веб-интерфейс или центр управления): по умолчанию 3 дня, 0 — не хранить. Срок считается с момента конфликта, а старые копии удаляет любое устройство при своей синхронизации.
+
+**Какие сохранения синхронизируются** — только систем, в которые играют на этом устройстве: если для системы здесь есть ромы или её сохранения уже лежат на устройстве. Сохранения остальных систем остаются в облаке и сюда не скачиваются; появились ромы — система подключится при следующей синхронизации, и сохранения из облака придут первыми. Любую систему можно исключить вручную, а системы, у которых сохранения есть только в облаке, показываются в списке исключений с пометкой «только в облаке».
+
+> **Совет:** чтобы сохранения переходили между устройствами, выбирайте для системы одно и то же ядро (эмулятор) на всех устройствах. Разные ядра — например, для PS1 или N64 — хранят сохранения в разных форматах и под разными именами, и другое ядро их просто не увидит.
 
 ## Скриншоты
 
 ![Веб-интерфейс](screenshots/web.png)
 
 ![Центр управления](screenshots/control-panel.jpg)
+
+![Вкладка «Ромы» в веб-интерфейсе](screenshots/web-rom.jpg)
 
 ## Поддерживаемые облака
 
@@ -100,6 +119,10 @@ chmod +x /recalbox/share/system/install_sync.sh
 
 **4. Следуйте инструкциям на экране** — выберите облачный сервис, введите логин и пароль, дождитесь окончания установки. Если скрипт уже установлен, вместо этого предложит обновиться с сохранением текущих настроек.
 
+> **Обновление с прошлых версий:** обновите скрипт на всех своих устройствах, а не только на одном — новая синхронизация ведёт учёт иначе, и устройства со старой и новой версиями будут работать вразнобой.
+
+Для работы нужен `python3` (он же запускает веб-интерфейс): на проверенных версиях Batocera, KNULLI и Recalbox он есть. Если его нет, синхронизация не запустится, а в логе будет написано, чего не хватает.
+
 ## Центр управления
 
 Batocera / KNULLI:
@@ -111,7 +134,7 @@ Recalbox:
 /recalbox/share/system/install_sync.sh --config
 ```
 
-Всё через меню: ручная синхронизация, исключение систем из синхронизации, копирование и загрузка ромов, интервал синхронизации, количество попыток, статистика и логи, полная диагностика, перезапуск веб-интерфейса.
+Всё через меню: загрузка, выгрузка и полная синхронизация сохранений, исключение систем из синхронизации, копирование и загрузка ромов, загрузка по публичной ссылке, интервал синхронизации, количество попыток, копии при конфликтах, статистика и логи, полная диагностика, перезапуск веб-интерфейса.
 
 ## Веб-интерфейс
 
@@ -119,9 +142,23 @@ Recalbox:
 ```
 http://IP_АДРЕС_УСТРОЙСТВА:8080
 ```
-Дублирует все функции центра управления — синхронизацию, работу с ромами, исключения, живой прогресс, статистику, логи — из браузера любого устройства в той же сети. (Если не открывается сразу после установки — перезапустите через центр управления или перезагрузите устройство.)
+Дублирует все функции центра управления — синхронизацию, работу с ромами, загрузку по ссылке, исключения, живой прогресс, статистику, логи — из браузера любого устройства в той же сети. (Если не открывается сразу после установки — перезапустите через центр управления или перезагрузите устройство.)
+
+В статистике синхронизации делятся на три группы: без изменений, с изменениями и с ошибкой.
 
 Работает по обычному HTTP без сертификата — браузер может пометить страницу как «Не защищено». Это ожидаемо и не страшно в пределах домашней сети — настоящий SSL-сертификат не имеет смысла для устройства с локальным IP.
+
+## Загрузка ромов по публичной ссылке
+
+Вставьте ссылку на папку или файл — Save Sync покажет, что внутри, а вы выберете нужное и систему, куда класть. Поддерживаются **Яндекс.Диск**, **pCloud**, **Nextcloud / ownCloud** (в том числе со ссылками на подпапки и с паролем) и **archive.org**.
+
+- Скачивать можно на устройство (в `roms/<система>`) или сразу в облако (`GameROMs/<система>`), ничего не занимая на карте
+- Из zip-архива можно выбрать отдельные файлы — читается только нужное, архив целиком качать не придётся
+- Скачанные `.zip` / `.7z` / `.rar` можно распаковать — на устройстве или прямо в облаке (для `.7z` и `.rar` нужна программа `7z`, `7zr`, `unrar` или `bsdtar`; на Recalbox обычно доступен только `.7z`)
+- Файлы, которые уже есть на устройстве, пропускаются, а прерванная загрузка докачивается при повторном запуске той же ссылки
+- Перед началом проверяется свободное место: считается только то, что действительно нужно докачать
+
+Доступно в веб-интерфейсе и в центре управления (пункт «Скачать по публичной ссылке»).
 
 ## Диагностика
 
@@ -133,16 +170,19 @@ Recalbox:
 ```bash
 /recalbox/share/system/install_sync.sh --info
 ```
-Проверка версии rclone, подключения к облаку, прав на скрипты, значений конфига, свободного места (локально и в облаке), состояния интернета, последних записей лога — всё в одном месте.
+Проверка версии rclone, подключения к облаку, прав на скрипты, значений конфига, свободного места (локально и в облаке), состояния интернета, статистики синхронизаций, последних записей лога — всё в одном месте.
 
 ## Создаваемые файлы
 
 В системной папке устройства создаются:
 
 - `install_sync.sh` — установщик / центр управления
-- `download_sync.sh`, `upload_sync.sh` — загрузка и выгрузка сохранений
+- `download_sync.sh`, `upload_sync.sh` — запуск загрузки и выгрузки сохранений
+- `sync_engine.py` — сам алгоритм двусторонней синхронизации: что изменилось здесь, что в облаке, конфликты, сохранения портов
 - `download_roms.sh`, `upload_roms.sh` — загрузка и выгрузка ромов
+- `link_download.py` — загрузка по публичной ссылке
 - `sync.conf` — основной конфиг
+- `.sync_state`, `.sync_base.json` — состояние синхронизации (как выглядели сохранения при последней синхронизации)
 - `roms_filter_sync` — фильтр ромов
 - `bin/rclone` — сам rclone
 - `.config/rclone/rclone.conf` — конфиг облака
@@ -150,13 +190,16 @@ Recalbox:
 
 Также добавляется хук выхода из игры (запускает выгрузку сохранений) и строка запуска в файл автозагрузки системы (`custom.sh` или `services/custom_service`).
 
+В облаке используются папки `GameSaves` (сохранения; для портов — `GameSaves/_ports`), `GameROMs` (ромы) и `GameSaves_conflicts` (копии при конфликтах).
+
 ## Удаление
 
 Batocera / KNULLI:
 ```bash
 rm -f /userdata/system/download_sync.sh /userdata/system/upload_sync.sh \
       /userdata/system/download_roms.sh /userdata/system/upload_roms.sh \
-      /userdata/system/sync.conf /userdata/system/roms_filter_sync \
+      /userdata/system/link_download.py /userdata/system/sync_engine.py /userdata/system/.sync_base.json \
+      /userdata/system/sync.conf /userdata/system/.sync_state /userdata/system/roms_filter_sync \
       /userdata/system/scripts/save-sync.sh /userdata/system/logs/save_sync.log \
       /userdata/system/.config/rclone/rclone.conf /userdata/system/bin/rclone
 sed -i '/download_sync.sh/d' /userdata/system/custom.sh 2>/dev/null
@@ -166,7 +209,9 @@ Recalbox:
 ```bash
 rm -f /recalbox/share/system/download_sync.sh /recalbox/share/system/upload_sync.sh \
       /recalbox/share/system/download_roms.sh /recalbox/share/system/upload_roms.sh \
-      /recalbox/share/system/sync.conf /recalbox/share/system/roms_filter_sync \
+      /recalbox/share/system/link_download.py /recalbox/share/system/sync_engine.py /recalbox/share/system/.sync_base.json \
+      /recalbox/share/system/sync.conf /recalbox/share/system/.sync_state \
+      /recalbox/share/system/roms_filter_sync \
       /recalbox/share/system/logs/save_sync.log \
       /recalbox/share/system/.config/rclone/rclone.conf /recalbox/share/system/bin/rclone \
       "/recalbox/share/userscripts/save-sync[endgame].sh"
@@ -186,19 +231,31 @@ sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 Зависит от размера файлов и скорости интернета. Крупные сохранения (1–4 МБ) могут идти несколько минут. После игры с тяжёлыми сохранениями не выключайте устройство сразу — дайте немного времени. То же самое при загрузке: большие сохранения подтягиваются не мгновенно.
 
 **Что такое интервал синхронизации?**
-Минимальное время между синхронизациями. Например, если установить 5 минут, синхронизация при выходе из игры выполнится, только если с предыдущей прошло больше 5 минут — это помогает не перегружать облако при частых выходах из игры.
+Минимальное время между синхронизациями. Например, если установить 5 минут, синхронизация при выходе из игры выполнится, только если с предыдущей прошло больше 5 минут — это помогает не перегружать облако при частых выходах из игры. Если играть на двух устройствах подряд, интервал может отложить отправку, и тогда вместо обычной синхронизации получится конфликт — он разрешается автоматически, остаётся более новая версия.
+
+**Что такое «Копии при конфликтах»?**
+Если одно и то же сохранение изменили на двух устройствах до синхронизации, остаётся более новая версия, а проигравшая может храниться в папке `GameSaves_conflicts` в облаке — на случай, если выбрана не та. Срок хранения (по умолчанию 3 дня, 0 — не хранить) настраивается в веб-интерфейсе или центре управления. Вернуть старую версию можно, скопировав файл из этой папки обратно в `GameSaves` и убрав из имени метку устройства и даты.
 
 **Зачем исключать систему из синхронизации?**
-Исключение ускоряет синхронизацию и экономит трафик. Некоторые системы (MAME, Final Burn Neo) создают крупные сохранения, которые не обязательно держать в облаке. Исключить можно через центр управления или веб-интерфейс.
+Исключение ускоряет синхронизацию и экономит трафик. Некоторые системы (MAME, Final Burn Neo) создают крупные сохранения, которые не обязательно держать в облаке. Исключить можно через центр управления или веб-интерфейс. Исключённая система не скачивается и не выгружается.
+
+**Что значит «только в облаке» в списке исключений?**
+Сохранения этой системы лежат в облаке (их загрузило другое устройство), а ромов этой системы на этом устройстве нет. Скачиваться сюда такие сохранения не будут, пока здесь не появятся ромы или сохранения этой системы. Исключать их вручную не нужно.
+
+**Сохранения какой-то системы не скачались на устройство?**
+Скорее всего, для этой системы на устройстве нет ромов. Сохранения скачиваются только для систем, в которые играют на этом устройстве. Добавьте ромы (в том числе через загрузку по ссылке или из облака) — при следующей синхронизации сохранения придут.
 
 **Как добавить ромы без кард-ридера и FTP?**
-Закиньте их в `GameROMs/<система>/` в облаке, затем запустите загрузку ромов с устройства — они появятся в нужных папках сами.
+Закиньте их в `GameROMs/<система>/` в облаке, затем запустите загрузку ромов с устройства — они появятся в нужных папках сами. Или вставьте публичную ссылку (Яндекс.Диск, pCloud, Nextcloud, archive.org) в разделе «Скачать по публичной ссылке».
 
 **Что именно делает "Копирование и загрузка ромов"?**
 Это не двусторонняя синхронизация, а резервное копирование и восстановление по отдельности. Выгрузка отправляет ромы в облако (создаёт копию), загрузка — забирает их обратно (восстанавливает на устройстве). При выгрузке файлы, которых больше нет на устройстве, удаляются и из облачной копии.
 
 **Удалил сохранение, а в облаке осталось?**
-Исчезнет при следующем выходе из игры (это и запускает синхронизацию) — а когда включите другое устройство, удалится и там. Если хотите синхронизировать сразу, зайдите в любую игру и выйдите, чтобы вызвать синхронизацию принудительно.
+Исчезнет при следующей синхронизации (например, при выходе из игры) — а на других устройствах удалится при их следующей синхронизации. Если хотите синхронизировать сразу, зайдите в любую игру и выйдите, чтобы вызвать синхронизацию принудительно.
+
+**Иконка удалённого сохранения осталась в списке игр?**
+Список слотов сохранений интерфейс кэширует. Файл уже удалён, а иконка исчезнет после обновления списка игр или перезапуска интерфейса.
 
 **Сохранение есть, но игра не продолжается с этого места?**
 Некоторые эмуляторы (MAME, Final Burn Neo) не подгружают сохранение автоматически при запуске — загрузите вручную горячими клавишами (обычно Select + кнопка).
@@ -228,7 +285,7 @@ sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 
 <h1 align="center">Save Sync</h1>
 
-![Version](https://img.shields.io/badge/version-1.4.4-blue)
+![Version](https://img.shields.io/badge/version-1.4.5-blue)
 ![Platform](https://img.shields.io/badge/platform-Batocera%20%7C%20KNULLI%20%7C%20Recalbox-orange)
 
 **EN** · [Русский выше ↑](#top)
@@ -237,34 +294,54 @@ Cloud save synchronization, ROM copying and downloading for retro gaming handhel
 
 Save on one device, turn on another, keep playing from where you left off. Runs quietly in the background — no interruption to your gaming session. Manage everything from the device itself or from a browser on your phone/PC.
 
-*Tested on: Batocera 43.1, Recalbox 10.0.8, KNULLI Scarab*
+*Tested on: Batocera 43.1, Recalbox 10.1.1, KNULLI Scarab*
 
 ---
 
 ## What it does
 
 - Automatically syncs your save files to the cloud over **WebDAV**, using [rclone](https://rclone.org/) under the hood
-- Syncs on boot (pulls the latest saves) and on game exit (pushes new/changed saves)
+- Syncs on boot and on game exit, always both ways: what changed here goes to the cloud, what changed on other devices comes down here
 - Deletions sync too — remove a save in one place, and it's gone from the cloud and everywhere else
+- Play on several devices at once: other devices' progress is never blindly overwritten, and if the same save was changed on different devices, the newer version is kept and the older one can be stored as a copy in `GameSaves_conflicts` (3 days by default, can be turned off)
+- Saves only for the systems you actually play on this device: if there are no games for a system here, its saves are not downloaded and take no space
+- PortMaster port saves sync automatically — only the saves themselves, not game data or screen settings
 - ROM copying and downloading — upload your collection to the cloud, or pull down ROMs (and whole systems) you don't have locally yet
+- Download ROMs from a public link (Yandex Disk, pCloud, Nextcloud / ownCloud, archive.org) — straight to the device or the cloud: pick individual files and folders, take just the games you want out of a zip, unpack .zip / .7z / .rar
 - No always-on device needed: your devices don't have to be online at the same time, and there's no dedicated server or NAS to run — just a regular cloud WebDAV account
 - Works with any number of devices, in any mix of systems
 
 ## How syncing works
 
-**Turn on a device** — it pulls all saves from the cloud. If you played on another device, that progress is already here.
+On every sync the device and the cloud are compared with how things looked last time, and only what changed is transferred:
 
-**Exit a game** — pushes new and changed saves to the cloud in the background.
+| What happened | Result |
+|---|---|
+| Changed here | sent to the cloud |
+| Changed on another device | downloaded here |
+| Deleted here | deleted from the cloud |
+| Deleted on another device | deleted here |
+| Changed both here and on another device | the newer version is kept |
 
-**Delete a save** — it's removed from the cloud on the next game exit, and from other devices the next time they boot.
+**Turn on a device** — it pulls saves changed on other devices. If you played on another one, that progress is already here.
 
-> **Important:** don't run the same game on two devices at the same time. If you exit on both, the cloud keeps whichever device's save was pushed last — the other one is lost.
+**Exit a game** — sends what changed on this device and also pulls what changed on others.
+
+**Delete a save** — it's removed from the cloud on the next sync (for example when you exit a game), and from other devices on their next sync.
+
+**The same save changed on different devices** — the newer version is kept, and the older one can be stored as a copy in the `GameSaves_conflicts` cloud folder, named with the device and date, e.g. `snes/Zelda.srm.KNULLI-3f2a.2026-09-27_18-40-00`. It never asks you anything; a line about the conflict goes to the log. How many days such copies are kept is the "Conflict copies" setting (web interface or control panel): 3 days by default, 0 means don't keep. The age counts from the moment of the conflict, and any device removes old copies during its own sync.
+
+**Which saves are synced** — only those of systems you play on this device: the system has ROMs here, or its saves are already on the device. Saves of other systems stay in the cloud and are not downloaded here; once ROMs appear, the system joins the next sync and the cloud saves come down first. Any system can be excluded manually, and systems whose saves exist only in the cloud are listed among the exclusions with an "only in the cloud" badge.
+
+> **Tip:** for saves to move between devices, pick the same core (emulator) for a system on every device. Different cores — for PS1 or N64, for example — store saves in different formats and under different names, so another core simply won't see them.
 
 ## Screenshots
 
 ![Web interface](screenshots/web-en.png)
 
 ![Control panel](screenshots/control-panel-en.jpg)
+
+![ROMs tab in the web interface](screenshots/web-rom-en.jpg)
 
 ## Supported clouds
 
@@ -321,6 +398,10 @@ chmod +x /recalbox/share/system/install_sync.sh
 
 **4. Follow the prompts** — pick your cloud service, enter your credentials, and installation finishes on its own. If a previous install is detected, you'll be offered an update instead, with your existing settings preserved.
 
+> **Updating from an earlier version:** update the script on all your devices, not just one — the new sync keeps its records differently, so devices on the old and new versions would work out of step.
+
+`python3` is required (it also runs the web interface): it is present on the tested versions of Batocera, KNULLI and Recalbox. If it's missing, syncing won't run and the log will say what's missing.
+
 ## Control panel
 
 Batocera / KNULLI:
@@ -332,7 +413,7 @@ Recalbox:
 /recalbox/share/system/install_sync.sh --config
 ```
 
-Everything is menu-driven from here: manual sync, excluding specific systems from save sync, ROM backup/restore, sync interval, retry count, statistics and logs, full diagnostics, and restarting the web interface.
+Everything is menu-driven from here: download, upload and full save sync, excluding specific systems from save sync, ROM backup/restore, download from a public link, sync interval, retry count, conflict copies, statistics and logs, full diagnostics, and restarting the web interface.
 
 ## Web interface
 
@@ -340,9 +421,23 @@ After installation, a small web server starts automatically:
 ```
 http://YOUR_DEVICE_IP:8080
 ```
-It mirrors every feature in the control panel — sync, ROM management, exclusions, live progress, statistics, logs — from any browser on the same network. (If it doesn't come up right away after a fresh install, restart it from the control panel or just reboot the device.)
+It mirrors every feature in the control panel — sync, ROM management, link downloads, exclusions, live progress, statistics, logs — from any browser on the same network. (If it doesn't come up right away after a fresh install, restart it from the control panel or just reboot the device.)
+
+Statistics split syncs into three groups: without changes, with changes, and with errors.
 
 It's plain HTTP with no certificate — your browser may flag it as "not secure." That's expected and not a concern on a local home network; a real TLS certificate wouldn't make sense for a device with a local IP address anyway.
+
+## Downloading ROMs from a public link
+
+Paste a link to a folder or a file — Save Sync shows what's inside, you pick what you need and the system to put it in. Supported: **Yandex Disk**, **pCloud**, **Nextcloud / ownCloud** (including sub-folder links and password-protected shares) and **archive.org**.
+
+- Download to the device (`roms/<system>`) or straight to the cloud (`GameROMs/<system>`), using no space on the card
+- Pick individual files from inside a zip — only what you chose is read, the whole archive doesn't have to be downloaded
+- Downloaded `.zip` / `.7z` / `.rar` can be unpacked — on the device or right in the cloud (`.7z` and `.rar` need `7z`, `7zr`, `unrar` or `bsdtar` on the system; on Recalbox usually only `.7z` is available)
+- Files already on the device are skipped, and an interrupted download resumes when you run the same link again
+- Free space is checked up front, counting only what actually still has to be downloaded
+
+Available in the web interface and in the control panel ("Download from a public link").
 
 ## Diagnostics
 
@@ -354,16 +449,19 @@ Recalbox:
 ```bash
 /recalbox/share/system/install_sync.sh --info
 ```
-Checks rclone version, cloud connectivity, script permissions, config values, free space (local and cloud), internet status, and recent log entries — all in one place.
+Checks rclone version, cloud connectivity, script permissions, config values, free space (local and cloud), internet status, sync statistics, and recent log entries — all in one place.
 
 ## Files created
 
 Inside the device's system folder, the script creates:
 
 - `install_sync.sh` — installer / control panel
-- `download_sync.sh`, `upload_sync.sh` — save download/upload
+- `download_sync.sh`, `upload_sync.sh` — start the save download/upload
+- `sync_engine.py` — the two-way sync algorithm itself: what changed here, what changed in the cloud, conflicts, port saves
 - `download_roms.sh`, `upload_roms.sh` — ROM download/upload
+- `link_download.py` — download from a public link
 - `sync.conf` — main config
+- `.sync_state`, `.sync_base.json` — sync state (how the saves looked at the last sync)
 - `roms_filter_sync` — ROM filter
 - `bin/rclone` — rclone itself
 - `.config/rclone/rclone.conf` — cloud config
@@ -371,13 +469,16 @@ Inside the device's system folder, the script creates:
 
 It also adds a game-exit hook (triggers the save upload) and a startup line to the system's autostart file (`custom.sh` or `services/custom_service`).
 
+In the cloud it uses the folders `GameSaves` (saves; ports go to `GameSaves/_ports`), `GameROMs` (ROMs) and `GameSaves_conflicts` (conflict copies).
+
 ## Uninstall
 
 Batocera / KNULLI:
 ```bash
 rm -f /userdata/system/download_sync.sh /userdata/system/upload_sync.sh \
       /userdata/system/download_roms.sh /userdata/system/upload_roms.sh \
-      /userdata/system/sync.conf /userdata/system/roms_filter_sync \
+      /userdata/system/link_download.py /userdata/system/sync_engine.py /userdata/system/.sync_base.json \
+      /userdata/system/sync.conf /userdata/system/.sync_state /userdata/system/roms_filter_sync \
       /userdata/system/scripts/save-sync.sh /userdata/system/logs/save_sync.log \
       /userdata/system/.config/rclone/rclone.conf /userdata/system/bin/rclone
 sed -i '/download_sync.sh/d' /userdata/system/custom.sh 2>/dev/null
@@ -387,7 +488,9 @@ Recalbox:
 ```bash
 rm -f /recalbox/share/system/download_sync.sh /recalbox/share/system/upload_sync.sh \
       /recalbox/share/system/download_roms.sh /recalbox/share/system/upload_roms.sh \
-      /recalbox/share/system/sync.conf /recalbox/share/system/roms_filter_sync \
+      /recalbox/share/system/link_download.py /recalbox/share/system/sync_engine.py /recalbox/share/system/.sync_base.json \
+      /recalbox/share/system/sync.conf /recalbox/share/system/.sync_state \
+      /recalbox/share/system/roms_filter_sync \
       /recalbox/share/system/logs/save_sync.log \
       /recalbox/share/system/.config/rclone/rclone.conf /recalbox/share/system/bin/rclone \
       "/recalbox/share/userscripts/save-sync[endgame].sh"
@@ -407,19 +510,31 @@ Only briefly, at boot and when exiting a game. Play offline the rest of the time
 Depends on file size and connection speed. Larger saves (1–4 MB) can take a few minutes. Don't power off right after a session with heavy saves — give it a moment. Same on download: big saves don't pull down instantly.
 
 **What's the sync interval?**
-The minimum time between syncs. Set it to 5 minutes, for example, and a sync on game exit only actually runs if more than 5 minutes have passed since the last one — keeps frequent game-exits from hammering your cloud storage.
+The minimum time between syncs. Set it to 5 minutes, for example, and a sync on game exit only actually runs if more than 5 minutes have passed since the last one — keeps frequent game-exits from hammering your cloud storage. If you play on two devices one after another, the interval can delay the upload, and you end up with a conflict instead of a plain sync — it is resolved automatically, the newer version is kept.
+
+**What are "Conflict copies"?**
+If the same save was changed on two devices before they synced, the newer version is kept and the losing one can be stored in the `GameSaves_conflicts` cloud folder, in case the wrong one was picked. How long (3 days by default, 0 means don't keep) is set in the web interface or the control panel. To get the old version back, copy the file from that folder into `GameSaves` and remove the device and date tag from its name.
 
 **Why exclude a system from sync?**
-Excluding a system speeds up sync and saves bandwidth. Some systems (MAME, FinalBurn Neo) produce large save files you may not want cluttering your cloud storage. Exclude them from the control panel or web UI.
+Excluding a system speeds up sync and saves bandwidth. Some systems (MAME, FinalBurn Neo) produce large save files you may not want cluttering your cloud storage. Exclude them from the control panel or web UI. An excluded system is neither downloaded nor uploaded.
+
+**What does "only in the cloud" mean in the exclusion list?**
+The saves of this system are in the cloud (another device uploaded them), but this device has no ROMs for the system. Such saves won't be downloaded here until ROMs or saves of that system appear on this device. You don't have to exclude them manually.
+
+**Saves of some system didn't download to the device?**
+Most likely there are no ROMs for that system on the device. Saves are downloaded only for systems you play on this device. Add the ROMs (including via a public link or from the cloud) and the saves will come on the next sync.
 
 **Can I add ROMs without a card reader or FTP access?**
-Drop them into `GameROMs/<system>/` in your cloud storage, then run a ROM download from the device — they'll land in the right folders automatically.
+Drop them into `GameROMs/<system>/` in your cloud storage, then run a ROM download from the device — they'll land in the right folders automatically. Or paste a public link (Yandex Disk, pCloud, Nextcloud, archive.org) in "Download from a public link".
 
 **What does "ROM backup and restore" actually do?**
 It's not a two-way sync — upload and download are separate, one-directional operations. Upload pushes your ROMs to the cloud as a backup copy; download pulls them back down to restore on a device. On upload, files no longer present locally are removed from the cloud copy too.
 
 **Deleted a save but it's still in the cloud?**
-It disappears on the next game exit (which triggers a sync) — and from other devices too, the next time they boot. Launch and quit any game to force a sync right away if you don't want to wait.
+It disappears on the next sync (for example when you exit a game) — and from other devices on their next sync. Launch and quit any game to force a sync right away if you don't want to wait.
+
+**The icon of a deleted save is still in the games list?**
+The interface caches the list of save slots. The file is already gone, and the icon disappears after the games list is refreshed or the interface is restarted.
 
 **A save exists but the game doesn't resume from it?**
 Some emulators (MAME, FinalBurn Neo) don't auto-load saves on launch — load manually with the in-game hotkey (usually Select + a face button).
