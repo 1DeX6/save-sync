@@ -36,13 +36,13 @@
 
 При каждой синхронизации устройство и облако сравниваются с тем, как всё выглядело в прошлый раз, и переносится только то, что изменилось:
 
-| Что произошло | Результат |
+| Что произошло | Что будет |
 |---|---|
-| Изменено здесь | отправляется в облако |
-| Изменено на другом устройстве | скачивается сюда |
-| Удалено здесь | удаляется из облака |
-| Удалено на другом устройстве | удаляется здесь |
-| Изменено и здесь, и на другом устройстве | остаётся более новая версия |
+| Сохранение изменили на этом устройстве | новая версия уходит в облако |
+| Сохранение изменили на другом устройстве | новая версия скачивается на это устройство |
+| Сохранение удалили на этом устройстве | оно удаляется из облака, а затем и с других устройств |
+| Сохранение удалили на другом устройстве | оно удаляется и с этого устройства |
+| Сохранение изменили и на этом, и на другом устройстве | остаётся более новая версия |
 
 **Включили устройство** — забирает сохранения, изменённые на других устройствах. Если играли на другом, прогресс уже будет здесь.
 
@@ -315,13 +315,13 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 
 On every sync the device and the cloud are compared with how things looked last time, and only what changed is transferred:
 
-| What happened | Result |
+| What happened | What happens next |
 |---|---|
-| Changed here | sent to the cloud |
-| Changed on another device | downloaded here |
-| Deleted here | deleted from the cloud |
-| Deleted on another device | deleted here |
-| Changed both here and on another device | the newer version is kept |
+| A save was changed on this device | the new version is uploaded to the cloud |
+| A save was changed on another device | the new version is downloaded to this device |
+| A save was deleted on this device | it is deleted from the cloud, and then from your other devices |
+| A save was deleted on another device | it is deleted from this device too |
+| A save was changed on both this and another device | the newer version is kept |
 
 **Turn on a device** — it pulls saves changed on other devices. If you played on another one, that progress is already here.
 
