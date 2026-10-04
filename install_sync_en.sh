@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ################################################
-# Save Sync Installer v1.4.5
+# Save Sync Installer v1.4.6
 # Cloud sync for saves and ROMs
 # Batocera / KNULLI / Recalbox
 #
@@ -41,6 +41,7 @@ LAST_SYNC_TIME="/tmp/save_sync_last_time"
 SYNC_INTERVAL=0
 MAX_RETRIES=3
 CONFLICT_KEEP_DAYS=3
+NOTIFICATIONS="true"
 MIN_FREE_KB=51200
 MAX_LOG_SIZE=102400
 ROMS_SYNC_DIRS=""
@@ -103,7 +104,7 @@ ensure_rclone_executable() {
 create_default_config() {
     cat > "$CONFIG_FILE" << 'EOF'
 # ========================================
-# Save Sync v1.4.5 - Main config
+# Save Sync v1.4.6 - Main config
 # ========================================
 
 # ── SYNC SETTINGS ──
@@ -115,6 +116,9 @@ MAX_RETRIES="3"
 
 # How many days conflict copies of saves are kept in the cloud (0 = do not keep)
 CONFLICT_KEEP_DAYS="3"
+
+# On-screen notifications (Batocera, KNULLI): saves received/sent and errors. true / false
+NOTIFICATIONS="true"
 
 # Free space threshold (KB) below which sync is skipped
 MIN_FREE_KB="51200"
@@ -143,6 +147,10 @@ sync_stats_counts() {
     SYNC_ERR=$(grep -cE "Save (download|upload) error|First (download|upload) error|Upload error for saves|Cloud unavailable \(no network" "$LOG_FILE" 2>/dev/null); SYNC_ERR=${SYNC_ERR:-0}
 }
 
+notify_label() {
+    if [ "${NOTIFICATIONS:-true}" = "false" ]; then echo "off"; else echo "on"; fi
+}
+
 keep_days_label() {
     if [ "${CONFLICT_KEEP_DAYS:-3}" = "0" ]; then echo "not kept"; else echo "${CONFLICT_KEEP_DAYS:-3} days"; fi
 }
@@ -164,6 +172,7 @@ load_config() {
                 SYNC_INTERVAL) SYNC_INTERVAL="$value" ;;
                 MAX_RETRIES) MAX_RETRIES="$value" ;;
                 CONFLICT_KEEP_DAYS) CONFLICT_KEEP_DAYS="$value" ;;
+                NOTIFICATIONS) NOTIFICATIONS="$value" ;;
                 MIN_FREE_KB) MIN_FREE_KB="$value" ;;
                 ROMS_SYNC_DIRS) ROMS_SYNC_DIRS="$value" ;;
                 ROMS_SYNC_MEDIA) ROMS_SYNC_MEDIA="$value" ;;
@@ -186,13 +195,14 @@ load_config() {
 save_config() {
     cat > "$CONFIG_FILE" << EOF
 # ========================================
-# Save Sync v1.4.5 - Main config
+# Save Sync v1.4.6 - Main config
 # ========================================
 
 # ── SYNC SETTINGS ──
 SYNC_INTERVAL="$SYNC_INTERVAL"
 MAX_RETRIES="$MAX_RETRIES"
 CONFLICT_KEEP_DAYS="$CONFLICT_KEEP_DAYS"
+NOTIFICATIONS="${NOTIFICATIONS:-true}"
 MIN_FREE_KB="$MIN_FREE_KB"
 
 # ── ROM SETTINGS ──
@@ -822,7 +832,27 @@ def rclone_cmd(args):
     return [os.environ.get("SS_RCLONE") or "rclone", "--config", RCLONE_CONF] + args
 
 
+TIMING = os.environ.get("SS_TIMING") == "1"
+TIMES = {}
+
+
+def timed(name, t0):
+    e = TIMES.setdefault(name, [0, 0.0])
+    e[0] += 1
+    e[1] += time.time() - t0
+
+
 def rclone(args, check=True, stats=False, timeout=3600):
+    """Same as _rclone; with SS_TIMING=1 (LOG_LEVEL="debug") it also counts the time per rclone command."""
+    t0 = time.time()
+    try:
+        return _rclone(args, check, stats, timeout)
+    finally:
+        if TIMING:
+            timed(args[0], t0)
+
+
+def _rclone(args, check=True, stats=False, timeout=3600):
     """-> (returncode, stdout). Transfers show progress (terminal or Web UI)."""
     cmd = rclone_cmd(args)
     retries = max(1, int(os.environ.get("SS_RETRIES") or "3"))
@@ -857,6 +887,33 @@ def cloud_list(remote):
     except ValueError:
         raise SyncError("lsjson: bad output")
     return {i["Path"]: (i.get("Size", -1), i.get("ModTime", "")) for i in items}
+
+
+def refresh_listing(root, C, uploaded, deleted):
+    """The cloud listing after our own changes: only the files we just sent are asked
+    for again (a full listing of a big cloud folder takes long); if that does not
+    work out, the whole folder is listed again."""
+    C2 = {r: v for r, v in C.items() if r not in deleted}
+    if uploaded:
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".list") as f:
+            f.write("\n".join(sorted(uploaded)) + "\n")
+        try:
+            rc, out = rclone(["lsjson", "-R", "--files-only", "--no-mimetype", "--files-from-raw", f.name, root.remote], check=False)
+        finally:
+            os.remove(f.name)
+        try:
+            got = {i["Path"]: (i.get("Size", -1), i.get("ModTime", "")) for i in json.loads(out or "[]")} if rc == 0 else {}
+        except (ValueError, KeyError, TypeError):
+            got = {}
+        if all(r in got for r in uploaded):
+            for r in uploaded:
+                if root.accept(r, got[r][0]):
+                    C2[r] = got[r]
+                else:
+                    C2.pop(r, None)
+            return C2
+        return {r: v for r, v in cloud_list(root.remote).items() if root.accept(r, v[0])}
+    return C2
 
 
 def parse_time(s):
@@ -1006,6 +1063,15 @@ def md5(path):
 
 
 def local_list(root, base):
+    t0 = time.time()
+    try:
+        return _local_list(root, base)
+    finally:
+        if TIMING:
+            timed("scan", t0)
+
+
+def _local_list(root, base):
     """{rel: {"h","s","m"}}; the hash is reused when size and mtime did not change."""
     out = {}
     if not os.path.isdir(root.local):
@@ -1088,11 +1154,23 @@ def run():
     new_base_roots = {}
     total = {"d": 0, "u": 0, "c": 0, "x": 0}
 
+    saves_listing = None            # the whole cloud folder, listed once (it holds the port folders too)
     for root in roots():
         base = base_roots.get(root.name, {})
         L = local_list(root, base)
-        C = {r: v for r, v in cloud_list(root.remote).items() if root.accept(r, v[0])}
-        rc, mout = rclone(["cat", root.remote + "/" + MANIFEST], check=False)
+        if root.name == "saves":
+            saves_listing = cloud_list(root.remote)
+            listing = saves_listing
+        elif saves_listing is not None and root.remote.startswith(REMOTE + "/"):
+            prefix = root.remote[len(REMOTE) + 1:] + "/"
+            listing = {r[len(prefix):]: v for r, v in saves_listing.items() if r.startswith(prefix)}
+        else:
+            listing = cloud_list(root.remote)
+        C = {r: v for r, v in listing.items() if root.accept(r, v[0])}
+        if MANIFEST in listing:
+            rc, mout = rclone(["cat", root.remote + "/" + MANIFEST], check=False)
+        else:
+            rc, mout = 1, ""            # the listing shows there is no manifest yet
         try:
             M = json.loads(mout) if rc == 0 and mout.strip() else {}
         except ValueError:
@@ -1227,8 +1305,15 @@ def run():
                 done.update(downs)
 
             # 4. deletions (the copies are already in _conflicts)
+            if del_cloud:
+                # one call for all files (each rclone call takes seconds on a slow cloud)
+                with tempfile.NamedTemporaryFile("w", delete=False, suffix=".list") as f:
+                    f.write("\n".join(del_cloud) + "\n")
+                try:
+                    rclone(["delete", root.remote, "--files-from-raw", f.name])
+                finally:
+                    os.remove(f.name)
             for rel in del_cloud:
-                rclone(["deletefile", root.remote + "/" + rel])
                 if not quiet_in_log(rel):
                     log(t("deleted_cloud", rel=root.label(rel)))
                 done.add(rel)
@@ -1264,7 +1349,7 @@ def run():
 
         # ---- new state: everything that is now the same on both sides
         changed_cloud = bool(up or won_local or del_cloud)
-        C2 = {r: v for r, v in cloud_list(root.remote).items() if root.accept(r, v[0])} if changed_cloud else C
+        C2 = refresh_listing(root, C, set(up) | set(won_local), set(del_cloud)) if changed_cloud else C
         L2 = local_list(root, base)
         nb = {}
         for rel in set(same) | done:
@@ -1277,31 +1362,43 @@ def run():
         # ---- manifest in the cloud: who wrote which version, and when. It is read
         # again right before writing, so what another device wrote meanwhile stays.
         uploaded = set(up) | set(won_local)
-        rc, mout = rclone(["cat", root.remote + "/" + MANIFEST], check=False)
-        try:
-            fresh = json.loads(mout).get("files", {}) if rc == 0 and mout.strip() else {}
-        except (ValueError, AttributeError):
-            fresh = {}
-        newM = dict(fresh)
-        for rel in list(newM):
-            if not root.accept(rel, None):
-                continue            # not ours (excluded, or no games here): another device's entry stays
-            if rel not in C2 or rel in del_cloud:
-                newM.pop(rel, None)
-        for rel, e in nb.items():
-            c = C2[rel]
-            old_e = newM.get(rel) or M.get(rel) or {}
-            if rel in uploaded:
-                newM[rel] = {"h": e["h"], "s": c[0], "ct": c[1], "d": dev, "t": L2[rel]["m"]}
-            elif old_e.get("h") != e["h"] or old_e.get("s") != c[0]:
-                if rel in fresh and fresh[rel].get("h") != M.get(rel, {}).get("h"):
-                    continue        # changed by another device right now: its entry wins
-                newM[rel] = {"h": e["h"], "s": c[0], "ct": c[1], "d": old_e.get("d", ""),
-                             "t": old_e.get("t") or parse_time(c[1])}
+
+        def build_manifest(fresh):
+            newM = dict(fresh)
+            for rel in list(newM):
+                if not root.accept(rel, None):
+                    continue            # not ours (excluded, or no games here): another device's entry stays
+                if rel not in C2 or rel in del_cloud:
+                    newM.pop(rel, None)
+            for rel, e in nb.items():
+                c = C2[rel]
+                old_e = newM.get(rel) or M.get(rel) or {}
+                if rel in uploaded:
+                    newM[rel] = {"h": e["h"], "s": c[0], "ct": c[1], "d": dev, "t": L2[rel]["m"]}
+                elif old_e.get("h") != e["h"] or old_e.get("s") != c[0]:
+                    if rel in fresh and fresh[rel].get("h") != M.get(rel, {}).get("h"):
+                        continue        # changed by another device right now: its entry wins
+                    newM[rel] = {"h": e["h"], "s": c[0], "ct": c[1], "d": old_e.get("d", ""),
+                                 "t": old_e.get("t") or parse_time(c[1])}
+            return newM
+
+        # nothing to change in the manifest -> nothing to write, so no need to read it again
+        fresh = M
+        newM = build_manifest(fresh)
+        if newM != fresh:
+            rc, mout = rclone(["cat", root.remote + "/" + MANIFEST], check=False)
+            try:
+                fresh = json.loads(mout).get("files", {}) if rc == 0 and mout.strip() else {}
+            except (ValueError, AttributeError):
+                fresh = {}
+            newM = build_manifest(fresh)
         if newM != fresh:
             data = json.dumps({"version": 1, "files": newM}, ensure_ascii=False, separators=(",", ":")).encode()
+            t0 = time.time()
             subprocess.run(rclone_cmd(["rcat", root.remote + "/" + MANIFEST]), input=data,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if TIMING:
+                timed("rcat", t0)
             # a failed manifest write is harmless: it is only a hint for the other devices
 
     base_all["roots"] = new_base_roots
@@ -1367,6 +1464,12 @@ def clean_conflicts(keep, now):
     return True
 
 
+def timing_line(total):
+    parts = ["%s %dx %.1f s" % (k, v[0], v[1]) for k, v in TIMES.items() if k != "scan"]
+    scan = TIMES.get("scan", [0, 0.0])[1]
+    return "Timing: total %.1f s; rclone: %s; device scan %.1f s" % (total, ", ".join(parts) or "-", scan)
+
+
 def main(argv):
     global VERBOSE, WEB
     if not argv or argv[0] != "sync":
@@ -1377,7 +1480,11 @@ def main(argv):
     try:
         lock = open(ENGINE_LOCK, "w")
         fcntl.flock(lock, fcntl.LOCK_EX)     # a boot download and a game-exit upload never overlap
-        return run()
+        t_start = time.time()
+        rc_run = run()
+        if TIMING:
+            log(timing_line(time.time() - t_start))
+        return rc_run
     except SyncError as e:
         sys.stderr.write("%s\n" % e)
         return 1
@@ -1449,6 +1556,17 @@ WEB_PROGRESS=false
 if [ -f "\$CONFIG_FILE" ]; then
     . "\$CONFIG_FILE"
 fi
+
+# LOG_LEVEL="debug" in the config: write how long each stage of the sync took
+T0=\$(date +%s)
+[ "\$LOG_LEVEL" = "debug" ] && export SS_TIMING=1
+
+# on-screen message (EmulationStation on Batocera / KNULLI); silent if unavailable
+notify_screen() {
+    [ "\${NOTIFICATIONS:-true}" = "false" ] && return 0
+    command -v curl >/dev/null 2>&1 || return 0
+    curl -s -m 3 -X POST -H "Content-Type: text/plain; charset=utf-8" --data-binary "\$1" http://127.0.0.1:1234/notify >/dev/null 2>&1 || true
+}
 
 # ======== ARGUMENT HANDLING ========
 SHOW_PROGRESS=""
@@ -1607,6 +1725,7 @@ fi
 # in the cloud is downloaded, only what changed here is uploaded. If a save was
 # changed on different devices, the newer one is kept and the older one is copied to
 # the _conflicts folder (how long - the "Conflict copies" setting). Nothing is asked.
+T_ENG=\$(date +%s)
 progress_start "download" "Downloading saves"
 ENGINE_ARGS=(sync)
 [ "\$WEB_PROGRESS" = "true" ] && ENGINE_ARGS+=(--web-progress)
@@ -1627,13 +1746,16 @@ if [ \$ENGINE_EXIT -eq 0 ]; then
     save_status "OK"
     state_set PENDING_UPLOAD ""
     state_set LAST_GOOD_SYNC "\$(date +%s)"
+    [ "\$LOG_LEVEL" = "debug" ] && echo "\$(date '+%d.%m %H:%M:%S') Timing: before the sync started \$((T_ENG - T0)) s" >> "\$LOG_FILE" 2>/dev/null
     SYNC_NOTE=\$(cat "/tmp/save_sync_result.\$\$" 2>/dev/null); rm -f "/tmp/save_sync_result.\$\$"
     echo "\$(date '+%d.%m %H:%M:%S') Saves downloaded\${SYNC_NOTE:+ (\$SYNC_NOTE)}" >> "\$LOG_FILE" 2>/dev/null
+    [ -n "\$SYNC_NOTE" ] && [ "\$SYNC_NOTE" != "no changes" ] && notify_screen "Save Sync: \$SYNC_NOTE"
     progress_finish true "download" "Save download complete"
     exit 0
 fi
 save_status "ERROR"
 echo "\$(date '+%d.%m %H:%M:%S') Save download error (code: \$ENGINE_EXIT)" >> "\$LOG_FILE" 2>/dev/null
+notify_screen "Save Sync: sync error"
 progress_finish false "download" "Save download error"
 exit 1
 ENDOFSCRIPT
@@ -1681,6 +1803,17 @@ WEB_PROGRESS=false
 if [ -f "\$CONFIG_FILE" ]; then
     . "\$CONFIG_FILE"
 fi
+
+# LOG_LEVEL="debug" in the config: write how long each stage of the sync took
+T0=\$(date +%s)
+[ "\$LOG_LEVEL" = "debug" ] && export SS_TIMING=1
+
+# on-screen message (EmulationStation on Batocera / KNULLI); silent if unavailable
+notify_screen() {
+    [ "\${NOTIFICATIONS:-true}" = "false" ] && return 0
+    command -v curl >/dev/null 2>&1 || return 0
+    curl -s -m 3 -X POST -H "Content-Type: text/plain; charset=utf-8" --data-binary "\$1" http://127.0.0.1:1234/notify >/dev/null 2>&1 || true
+}
 
 # ======== ARGUMENT HANDLING ========
 SHOW_PROGRESS=""
@@ -1866,6 +1999,7 @@ fi
 # in the cloud is downloaded, only what changed here is uploaded. If a save was
 # changed on different devices, the newer one is kept and the older one is copied to
 # the _conflicts folder (how long - the "Conflict copies" setting). Nothing is asked.
+T_ENG=\$(date +%s)
 progress_start "upload" "Uploading saves"
 ENGINE_ARGS=(sync)
 [ "\$WEB_PROGRESS" = "true" ] && ENGINE_ARGS+=(--web-progress)
@@ -1886,13 +2020,16 @@ if [ \$ENGINE_EXIT -eq 0 ]; then
     save_status "OK"
     state_set PENDING_UPLOAD ""
     state_set LAST_GOOD_SYNC "\$(date +%s)"
+    [ "\$LOG_LEVEL" = "debug" ] && echo "\$(date '+%d.%m %H:%M:%S') Timing: before the sync started \$((T_ENG - T0)) s" >> "\$LOG_FILE" 2>/dev/null
     SYNC_NOTE=\$(cat "/tmp/save_sync_result.\$\$" 2>/dev/null); rm -f "/tmp/save_sync_result.\$\$"
     echo "\$(date '+%d.%m %H:%M:%S') Saves uploaded\${SYNC_NOTE:+ (\$SYNC_NOTE)}" >> "\$LOG_FILE" 2>/dev/null
+    [ -n "\$SYNC_NOTE" ] && [ "\$SYNC_NOTE" != "no changes" ] && notify_screen "Save Sync: \$SYNC_NOTE"
     progress_finish true "upload" "Save upload complete"
     exit 0
 fi
 save_status "ERROR"
 echo "\$(date '+%d.%m %H:%M:%S') Save upload error (code: \$ENGINE_EXIT)" >> "\$LOG_FILE" 2>/dev/null
+notify_screen "Save Sync: sync error"
 state_set PENDING_UPLOAD 1
 progress_finish false "upload" "Save upload error"
 exit 1
@@ -5605,7 +5742,7 @@ show_control_panel() {
         echo ""
         echo "══════════════════════════════════════════════════════════" 
         echo ""
-        echo "           Save Sync - Control Panel v1.4.5"
+        echo "           Save Sync - Control Panel v1.4.6"
         echo "" 
         echo "══════════════════════════════════════════════════════════"
         echo ""
@@ -5642,27 +5779,28 @@ show_control_panel() {
         echo "  6 - ⏱️ Sync interval (currently: $REAL_INTERVAL sec)"
         echo "  7 - 🔄 Retry count (currently: $REAL_RETRIES)"
         echo "  8 - 🗂️ Conflict copies (now: $(keep_days_label))"
+        echo "  9 - 🔔 On-screen notifications (now: $(notify_label))"
         echo ""
         
         echo " ── INFO ──"
-        echo "  9 - 📊 Statistics and logs"
-        echo " 10 - 🔍 Full diagnostics"
+        echo " 10 - 📊 Statistics and logs"
+        echo " 11 - 🔍 Full diagnostics"
         echo ""
         
         echo " ── SYSTEM ──"
-        echo " 11 - 🗑️ Clear temporary files"
-        echo " 12 - 🔄 Reboot device"
+        echo " 12 - 🗑️ Clear temporary files"
+        echo " 13 - 🔄 Reboot device"
         echo ""
         
         echo " ── WEB INTERFACE ──"
         echo "      🌐 http://$IP_ADDR:8080"
-        echo " 13 - 🔄 Restart web interface"
+        echo " 14 - 🔄 Restart web interface"
         echo ""
         echo "──────────────────────────────────────────────────────────"
         echo "  0 - 🚪 Exit"
         echo "══════════════════════════════════════════════════════════"
         echo ""
-        read -p "Choose an action (0-13): " choice
+        read -p "Choose an action (0-14): " choice
         
         case $choice in
             1) 
@@ -5875,15 +6013,39 @@ show_control_panel() {
                 pause
                 ;;
             9)
-                show_statistics
+                echo ""
+                echo "Now: $(notify_label)"
+                echo ""
+                echo "After a sync, a short message appears on screen: what was"
+                echo "received or sent, or that an error occurred. If nothing"
+                echo "changed, there is no message."
+                echo "Works on Batocera and KNULLI. Recalbox does not support notifications."
+                echo ""
+                echo " 1 - Turn on"
+                echo " 2 - Turn off"
+                echo ""
+                read -p "Choose (1-2): " notify_choice
+                case "$notify_choice" in
+                    1) NOTIFICATIONS="true" ;;
+                    2) NOTIFICATIONS="false" ;;
+                    *) echo "❌ Invalid choice"; pause; continue ;;
+                esac
+                save_config
+                echo ""
+                echo "✅ Notifications: $(notify_label)"
+                echo ""
+                pause
                 ;;
             10)
+                show_statistics
+                ;;
+            11)
                 echo ""
                 bash "$0" --info
                 echo ""
                 pause
                 ;;
-            11)
+            12)
                 echo ""
                 echo " 🗑️  Clearing temporary files"
                 echo ""
@@ -5902,7 +6064,7 @@ show_control_panel() {
                 echo ""
                 pause
                 ;;
-            12)
+            13)
                 echo ""
                 echo "⚠️ WARNING!"
                 echo "The device will be rebooted."
@@ -5919,7 +6081,7 @@ show_control_panel() {
                 echo ""
                 pause
                 ;;
-            13)
+            14)
                 echo ""
                 echo "🔄 Restarting web interface..."
                 # Stop the old one
@@ -5981,7 +6143,7 @@ restart_web_after_update() {
 start_web() {
     echo ""
     echo "══════════════════════════════════════════════════════════"
-    echo " 🌐 Save Sync - Web Interface v1.4.5"
+    echo " 🌐 Save Sync - Web Interface v1.4.6"
     echo "══════════════════════════════════════════════════════════"
     echo ""
     
@@ -6093,12 +6255,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 current[key] = value
             with open(CONFIG_FILE, "w") as f:
                 f.write("# ========================================\n")
-                f.write("# Save Sync v1.4.5 - Main config\n")
+                f.write("# Save Sync v1.4.6 - Main config\n")
                 f.write("# ========================================\n\n")
                 f.write("# ---- SYNC SETTINGS ----\n")
                 f.write(f'SYNC_INTERVAL="{current.get("SYNC_INTERVAL", 0)}"\n')
                 f.write(f'MAX_RETRIES="{current.get("MAX_RETRIES", 3)}"\n')
                 f.write(f'CONFLICT_KEEP_DAYS="{current.get("CONFLICT_KEEP_DAYS", 3)}"\n')
+                f.write(f'NOTIFICATIONS="{current.get("NOTIFICATIONS", "true")}"\n')
                 f.write(f'MIN_FREE_KB="{current.get("MIN_FREE_KB", 51200)}"\n\n')
                 f.write("# ---- ROM SETTINGS ----\n")
                 f.write(f'ROMS_SYNC_DIRS="{current.get("ROMS_SYNC_DIRS", "")}"\n')
@@ -7811,6 +7974,14 @@ body::after {
     </div>
     <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px">If the same save was changed on different devices, the newest version is kept and the older one is stored in the cloud, in GameSaves_conflicts, for the chosen time.</div>
     <div class="settings-row">
+      <label>On-screen notifications:</label>
+      <select id="settingNotifications">
+        <option value="true">On</option>
+        <option value="false">Off</option>
+      </select>
+    </div>
+    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px">After a sync, a short message appears on screen about saves received, sent, or an error. Works on Batocera and KNULLI.</div>
+    <div class="settings-row">
       <label>Logging:</label>
       <select id="settingLogEnabled">
         <option value="true">Enabled</option>
@@ -8255,6 +8426,7 @@ async function loadSettings() {
       document.getElementById('settingRetries').value = data.config.MAX_RETRIES || 3;
       const kd = data.config.CONFLICT_KEEP_DAYS;
       document.getElementById('settingKeepDays').value = (kd === undefined || kd === '') ? '3' : String(kd);
+      document.getElementById('settingNotifications').value = data.config.NOTIFICATIONS || 'true';
       document.getElementById('settingLogEnabled').value = data.config.LOG_ENABLED || 'true';
       // the log level field is hidden in the markup - skip it if absent
       const logLevelEl = document.getElementById('settingLogLevel');
@@ -8525,6 +8697,7 @@ async function saveSettings() {
     SYNC_INTERVAL: parseInt(document.getElementById('settingInterval').value) || 0,
     MAX_RETRIES: parseInt(document.getElementById('settingRetries').value) || 3,
     CONFLICT_KEEP_DAYS: parseInt(document.getElementById('settingKeepDays').value) || 0,
+    NOTIFICATIONS: document.getElementById('settingNotifications').value,
     LOG_ENABLED: document.getElementById('settingLogEnabled').value,
     // LOG_LEVEL: document.getElementById('settingLogLevel').value,  // ← COMMENT OUT OR REMOVE
     MAX_LOG_SIZE: parseInt(document.getElementById('settingLogSize').value) || 102400
@@ -8936,7 +9109,7 @@ if __name__ == "__main__":
     except:
         ip_addr = 'localhost'
     
-    print(f"\n✅ Save Sync Web UI v1.4.5 started")
+    print(f"\n✅ Save Sync Web UI v1.4.6 started")
     print(f"🌐 Open: http://{ip_addr}:{port}")
     print(f"⏹️  Ctrl+C to stop\n")
     
@@ -9001,7 +9174,7 @@ if [ "$1" = "--info" ]; then
     
     echo ""
     echo "══════════════════════════════════════════════════════════"
-    echo " Save Sync Diagnostics v1.4.5"
+    echo " Save Sync Diagnostics v1.4.6"
     echo " System: $SYSTEM"
     echo "══════════════════════════════════════════════════════════"
     echo ""
@@ -9250,6 +9423,7 @@ echo ""
         print_2col "Interval" "$SYNC_INTERVAL sec"
         print_2col "Retries" "$MAX_RETRIES"
         print_2col "Conflict copies" "$(keep_days_label)"
+        print_2col "Notifications" "$(notify_label)"
         print_2col "Exclusions" "${EXCLUDED_SYSTEMS:-none}"
     else
         print_2col "Main config" "❌ not found"
@@ -9338,7 +9512,7 @@ if [ -f "$RCLONE_CONF" ] && { [ -f "$DOWNLOAD_SCRIPT" ] || [ -f "$BASE/download_
     echo " Save Sync is already installed ($SYSTEM)"
     echo "══════════════════════════════════════════════════════════"
     echo ""
-    echo " 1 - Update to v1.4.5"
+    echo " 1 - Update to v1.4.6"
     echo " 2 - Reinstall from scratch"
     echo " 3 - Exit"
     echo ""
@@ -9347,7 +9521,7 @@ if [ -f "$RCLONE_CONF" ] && { [ -f "$DOWNLOAD_SCRIPT" ] || [ -f "$BASE/download_
     1)
         echo ""
         echo "══════════════════════════════════════════════════════════"
-        echo " 📦 Updating to v1.4.5"
+        echo " 📦 Updating to v1.4.6"
         echo "══════════════════════════════════════════════════════════"
         echo ""
         
@@ -9441,9 +9615,9 @@ EOF
         fi
         
         echo ""
-        echo "✅ Update to v1.4.5 complete!"
+        echo "✅ Update to v1.4.6 complete!"
 
-        log_msg "Update to v1.4.5 complete"
+        log_msg "Update to v1.4.6 complete"
 
         restart_web_after_update
 
@@ -9520,7 +9694,7 @@ fi
 
 echo ""
 echo "══════════════════════════════════════════════════════════"
-echo " Save Sync v1.4.5 - Installation"
+echo " Save Sync v1.4.6 - Installation"
 echo " $SYSTEM"
 echo "══════════════════════════════════════════════════════════"
 echo ""
@@ -9728,7 +9902,7 @@ fi
 
 SYSTEM_VERSION=$(get_system_version)
 
-log_msg "Save Sync v1.4.5 | $SYSTEM ($SYSTEM_VERSION) | rclone v${NEW_VER:-unknown}"
+log_msg "Save Sync v1.4.6 | $SYSTEM ($SYSTEM_VERSION) | rclone v${NEW_VER:-unknown}"
 log_msg "Installation complete"
 
 echo ""
