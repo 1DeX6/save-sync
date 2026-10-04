@@ -6,7 +6,7 @@
 
 <h1 align="center">Save Sync</h1>
 
-![Version](https://img.shields.io/badge/version-1.4.5-blue)
+![Version](https://img.shields.io/badge/version-1.4.6-blue)
 ![Platform](https://img.shields.io/badge/platform-Batocera%20%7C%20KNULLI%20%7C%20Recalbox-orange)
 
 **RU** · [English below ↓](#english)
@@ -30,6 +30,7 @@
 - Копирование и загрузка ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет локально
 - Загрузка ромов по публичной ссылке (Яндекс.Диск, pCloud, Nextcloud / ownCloud, archive.org) — сразу на устройство или в облако: можно выбрать отдельные файлы и папки, взять нужные игры из zip-архива, распаковать .zip / .7z / .rar
 - Не нужно постоянно включённое устройство: не требуется, чтобы оба девайса были онлайн одновременно, и не нужен отдельный сервер или NAS — только обычный облачный WebDAV-аккаунт
+- Показывает на экране короткое уведомление после синхронизации: что получено и отправлено, или ошибку. Работает на Batocera и KNULLI, на Recalbox уведомлений нет. Включается и выключается в центре управления и в веб-интерфейсе
 - Работает с любым числом устройств в любом сочетании систем
 
 ## Как работает синхронизация
@@ -58,9 +59,9 @@
 
 ![Веб-интерфейс](screenshots/web.png)
 
-![Центр управления](screenshots/control-panel.jpg)
-
 ![Вкладка «Ромы» в веб-интерфейсе](screenshots/web-rom.jpg)
+
+![Центр управления](screenshots/control-panel.jpg)
 
 ## Поддерживаемые облака
 
@@ -281,7 +282,7 @@ sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 
 <h1 align="center">Save Sync</h1>
 
-![Version](https://img.shields.io/badge/version-1.4.5-blue)
+![Version](https://img.shields.io/badge/version-1.4.6-blue)
 ![Platform](https://img.shields.io/badge/platform-Batocera%20%7C%20KNULLI%20%7C%20Recalbox-orange)
 
 **EN** · [Русский выше ↑](#top)
@@ -305,6 +306,7 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 - ROM copying and downloading — upload your collection to the cloud, or pull down ROMs (and whole systems) you don't have locally yet
 - Download ROMs from a public link (Yandex Disk, pCloud, Nextcloud / ownCloud, archive.org) — straight to the device or the cloud: pick individual files and folders, take just the games you want out of a zip, unpack .zip / .7z / .rar
 - No always-on device needed: your devices don't have to be online at the same time, and there's no dedicated server or NAS to run — just a regular cloud WebDAV account
+- Shows a short on-screen notification after a sync: what was received and sent, or an error. Works on Batocera and KNULLI; Recalbox has no notifications. Can be turned on and off in the control panel and in the web interface
 - Works with any number of devices, in any mix of systems
 
 ## How syncing works
@@ -333,9 +335,9 @@ On every sync the device and the cloud are compared with how things looked last 
 
 ![Web interface](screenshots/web-en.png)
 
-![Control panel](screenshots/control-panel-en.jpg)
-
 ![ROMs tab in the web interface](screenshots/web-rom-en.jpg)
+
+![Control panel](screenshots/control-panel-en.jpg)
 
 ## Supported clouds
 
