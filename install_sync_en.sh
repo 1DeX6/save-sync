@@ -9324,6 +9324,7 @@ body::after {
 .link-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .link-name.dir{color:var(--accent);cursor:pointer}
 .link-meta{color:var(--text-muted);font-size:12px;white-space:nowrap}
+@media (max-width:600px){.link-row{flex-wrap:wrap;row-gap:2px}.link-name{flex:1 1 0}.link-meta{flex-basis:100%;padding-left:52px;white-space:normal}.link-row:not(:has(input)) .link-meta{padding-left:26px}}
 .link-controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
 .link-controls select{min-width:180px}
 .link-summary{font-size:13px;color:var(--text-secondary);margin-top:10px;line-height:1.5}
