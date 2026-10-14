@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ################################################
-# Save Sync Installer v1.4.6
+# Save Sync Installer v1.4.7
 # Облачная синхронизация сохранений и ромов
 # Batocera / KNULLI / Recalbox
 #
@@ -42,6 +42,8 @@ SYNC_INTERVAL=0
 MAX_RETRIES=3
 CONFLICT_KEEP_DAYS=3
 NOTIFICATIONS="true"
+SKIP_UNCHANGED="true"
+SYNC_MODE=""
 MIN_FREE_KB=51200
 MAX_LOG_SIZE=102400
 ROMS_SYNC_DIRS=""
@@ -104,7 +106,7 @@ ensure_rclone_executable() {
 create_default_config() {
     cat > "$CONFIG_FILE" << 'EOF'
 # ========================================
-# Save Sync v1.4.6 - Главный конфиг
+# Save Sync v1.4.7 - Главный конфиг
 # ========================================
 
 # ── НАСТРОЙКИ СИНХРОНИЗАЦИИ ──
@@ -119,6 +121,9 @@ CONFLICT_KEEP_DAYS="3"
 
 # Уведомления на экране (Batocera, KNULLI): о полученных/отправленных сохранениях и ошибках. true / false
 NOTIFICATIONS="true"
+
+# Синхронизация после игры: economy (только при изменениях), fast (после каждой игры) или full (полная)
+SYNC_MODE="economy"
 
 # Порог свободного места (КБ) — при котором синхронизация не выполняется
 MIN_FREE_KB="51200"
@@ -138,17 +143,226 @@ EOF
 }
 
 sync_stats_counts() {
-    SYNC_OK=$(grep -cE "Сохранения загружены|Выгрузка сохранений" "$LOG_FILE" 2>/dev/null); SYNC_OK=${SYNC_OK:-0}
-    # "with changes" = the log line says what was moved: "(sent: 1, ...)"; a plain line or "(изменений нет)" means nothing was transferred
-    SYNC_NOTED=$(grep -cE "(Сохранения загружены|Выгрузка сохранений) \(" "$LOG_FILE" 2>/dev/null); SYNC_NOTED=${SYNC_NOTED:-0}
-    SYNC_EMPTY=$(grep -cE "(Сохранения загружены|Выгрузка сохранений) \(изменений нет\)" "$LOG_FILE" 2>/dev/null); SYNC_EMPTY=${SYNC_EMPTY:-0}
+    SYNC_OK=$(grep -cE "Сохранения загружены|Выгрузка сохранений|Синхронизация( вручную)? \(" "$LOG_FILE" 2>/dev/null); SYNC_OK=${SYNC_OK:-0}
+    # "with changes" = the log line says what was moved: "(sent: 1, ...)"; a plain line or "(нет изменений)" means nothing was transferred
+    SYNC_NOTED=$(grep -cE "(Сохранения загружены|Выгрузка сохранений|Синхронизация( вручную)?) \(" "$LOG_FILE" 2>/dev/null); SYNC_NOTED=${SYNC_NOTED:-0}
+    SYNC_EMPTY=$(grep -cE "(Сохранения загружены|Выгрузка сохранений|Синхронизация( вручную)?) \((изменений нет|нет изменений)\)" "$LOG_FILE" 2>/dev/null); SYNC_EMPTY=${SYNC_EMPTY:-0}
     SYNC_CHG=$((SYNC_NOTED - SYNC_EMPTY))
     SYNC_NOCHG=$((SYNC_OK - SYNC_CHG))
     SYNC_ERR=$(grep -cE "Ошибка (загрузки|выгрузки) сохранений|Ошибка первой (загрузки|выгрузки)|Ошибка отправки невыгруженных сохранений|Облако недоступно \(нет сети" "$LOG_FILE" 2>/dev/null); SYNC_ERR=${SYNC_ERR:-0}
 }
 
+ask_cloud_config() {
+    # asks for the cloud service and login, writes an rclone config to $1;
+    # $2 = "cancel": a "0 - Cancel" choice is offered (returns 2)
+    local CONF_OUT="$1"
+    echo ""
+    echo "Выберите облачный сервис"
+    echo ""
+    echo " 1 - Яндекс.Диск"
+    echo " 2 - Облако Mail.ru"
+    echo " 3 - pCloud"
+    echo " 4 - Koofr"
+    echo " 5 - Nextcloud / OwnCloud / другой WebDAV-сервер"
+    echo " 6 - Fastmail Files"
+    echo " 7 - Mega"
+    [ "$2" = "cancel" ] && echo " 0 - Отмена"
+    echo ""
+
+    if [ "$2" = "cancel" ]; then read -p "Введите номер (0-7): " CHOICE; else read -p "Введите номер (1-7): " CHOICE; fi
+    if [ "$2" = "cancel" ] && [ "$CHOICE" = "0" ]; then echo "❌ Отменено. Облако не изменено."; echo ""; return 2; fi
+
+    BACKEND_TYPE="webdav"
+
+    case "$CHOICE" in
+    1) URL="https://webdav.yandex.ru"; VENDOR="yandex" ;;
+    2) URL="https://webdav.cloud.mail.ru"; VENDOR="other" ;;
+    3)
+        echo ""
+        echo "Для pCloud: логин — email аккаунта, пароль — обычный пароль"
+        echo "от аккаунта. Регион (США или Европа) определится сам."
+        echo "Если включена двухфакторная защита, подключение может"
+        echo "не сработать."
+        URL="https://webdav.pcloud.com"; VENDOR="other"
+        ;;
+    4) URL="https://app.koofr.net/dav/Koofr"; VENDOR="other" ;;
+    5)
+        echo ""
+        read -p "Введите URL вашего WebDAV-сервера: " URL
+        echo ""
+        echo "Что именно вы используете?"
+        echo " 1 - Nextcloud"
+        echo " 2 - ownCloud"
+        echo " 3 - Другой WebDAV-сервер"
+        read -p "Введите номер (1-3): " NC_CHOICE
+        case "$NC_CHOICE" in
+            2) VENDOR="owncloud" ;;
+            3) VENDOR="other" ;;
+            *) VENDOR="nextcloud" ;;
+        esac
+        ;;
+    6)
+        echo ""
+        echo "Для Fastmail: логин — это ваш email на Fastmail, пароль —"
+        echo "отдельный пароль приложения с доступом к Files (WebDAV),"
+        echo "создать можно в настройках аккаунта Fastmail."
+        URL="https://webdav.fastmail.com/"
+        VENDOR="fastmail"
+        ;;
+    7)
+        echo ""
+        echo "Для Mega: логин — email вашего аккаунта, пароль — обычный"
+        echo "пароль от аккаунта."
+        echo ""
+        echo "⚠️  Если аккаунт Mega совсем новый - зайдите в него хотя бы"
+        echo "    один раз через обычный браузер перед этим шагом (Mega"
+        echo "    должна сгенерировать ключи шифрования на своей стороне,"
+        echo "    иначе подключение не сработает)."
+        BACKEND_TYPE="mega"
+        ;;
+    *) echo "❌ Неверный выбор."; return 1 ;;
+    esac
+
+    echo ""
+    echo "Введите логин:"
+    IFS= read -r YUSER
+    echo ""
+    echo "Введите пароль (или пароль приложения):"
+    IFS= read -rs YPASS
+    echo ""
+
+    PASS=$("$RCLONE_PATH" obscure "$YPASS")
+
+    if [ "$BACKEND_TYPE" = "mega" ]; then
+        cat > "$CONF_OUT" <<EOF
+[$REMOTE_NAME]
+type = mega
+user = $YUSER
+pass = $PASS
+EOF
+    else
+        cat > "$CONF_OUT" <<EOF
+[$REMOTE_NAME]
+type = webdav
+url = $URL
+vendor = $VENDOR
+user = $YUSER
+pass = $PASS
+EOF
+    fi
+
+    chmod 600 "$CONF_OUT"
+
+    # pCloud keeps accounts in the US or the EU, and each region has its own
+    # WebDAV address: if the US one does not let us in, the EU one is tried
+    if [ "$CHOICE" = "3" ] && ! "$RCLONE_PATH" --config "$CONF_OUT" lsd "$REMOTE_NAME:" >/dev/null 2>&1; then
+        sed -i 's|^url = https://webdav.pcloud.com$|url = https://ewebdav.pcloud.com|' "$CONF_OUT"
+        "$RCLONE_PATH" --config "$CONF_OUT" lsd "$REMOTE_NAME:" >/dev/null 2>&1 && echo "ℹ️  pCloud: аккаунт в европейском регионе."
+    fi
+    return 0
+}
+
+cloud_check() {
+    # checks the connection with the rclone config $1; on failure the reason
+    # (in words, for the user) is left in CLOUD_ERR
+    local out
+    CLOUD_ERR=""
+    out=$("$RCLONE_PATH" --config "$1" lsd "$REMOTE_NAME:" 2>&1 >/dev/null) && return 0
+    case "$out" in
+        *"401 Unauthorized"*|*"403 Forbidden"*|*[Cc]redentials*|*"password is incorrect"*|*"invalid username or password"*)
+            CLOUD_ERR="неверный логин или пароль (для этого сервиса может быть нужен пароль приложения)"
+            grep -q "pcloud" "$1" 2>/dev/null && CLOUD_ERR="неверный логин или пароль. Если аккаунт pCloud создан через Google, Apple или Facebook - сначала задайте пароль на сайте pCloud («Забыли пароль?»)" ;;
+        *"no such host"*|*"i/o timeout"*|*"connection refused"*|*"network is unreachable"*|*"dial tcp"*)
+            CLOUD_ERR="сервер не отвечает - проверьте интернет и адрес сервера" ;;
+        *)
+            CLOUD_ERR=$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -1 \
+                | sed -E 's#^[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9:]+ [A-Z]+ *: ##' | cut -c1-200) ;;
+    esac
+    return 1
+}
+
+cloud_about() {
+    # volume of the cloud as "Total: / Used: / Free:" lines (empty when the service
+    # does not report it)
+    SS_RCLONE="$RCLONE_PATH" python3 "$ENGINE_SCRIPT" about 2>/dev/null
+}
+
+cloud_free_unknown() {
+    # what to show when the cloud does not give its volume: pCloud never reports it
+    # over WebDAV, for other services it is just unknown at the moment
+    if [ "$(cloud_service "$RCLONE_CONF")" = "pCloud" ]; then echo "не сообщается"; else echo "неизвестно"; fi
+}
+
+sync_busy() {
+    # true while a save sync holds its lock
+    ! ( flock -n 8 && flock -n 9 ) 8>/tmp/save_sync_download.lock 9>/tmp/save_sync_upload.lock
+}
+
+stop_sync() {
+    # stops a running save sync (for example one that hangs on an unreachable cloud):
+    # the scripts and the engine get TERM (they log the cancel themselves), their
+    # rclone children too - the children keep the lock open otherwise
+    local pids kids p i
+    pids=$(pgrep -f "sync_engine\.py sync|download_sync\.sh|upload_sync\.sh" 2>/dev/null)
+    kids=""
+    for p in $pids; do kids="$kids $(pgrep -P "$p" 2>/dev/null)"; done
+    # the children are collected first: once a parent is gone they cannot be found by it
+    # shellcheck disable=SC2086
+    [ -n "$pids" ] && kill -TERM $kids $pids 2>/dev/null
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        sync_busy || return 0
+        sleep 1
+    done
+    return 1
+}
+
+cloud_label() {
+    # short name of the cloud service in the rclone config $1
+    local f="$1" u url
+    [ -f "$f" ] || { echo "не настроено"; return; }
+    u=$(sed -n 's/^user = //p' "$f" | head -1)
+    url=$(sed -n 's/^url = //p' "$f" | head -1)
+    if grep -q "^type = mega" "$f"; then echo "Mega${u:+ ($u)}"; return; fi
+    case "$url" in
+        *yandex*) echo "Яндекс.Диск${u:+ ($u)}" ;;
+        *mail.ru*) echo "Облако Mail.ru${u:+ ($u)}" ;;
+        *pcloud*) echo "pCloud${u:+ ($u)}" ;;
+        *koofr*) echo "Koofr${u:+ ($u)}" ;;
+        *fastmail*) echo "Fastmail${u:+ ($u)}" ;;
+        *) echo "WebDAV${url:+ $url}${u:+ ($u)}" ;;
+    esac
+}
+
+cloud_service() {
+    # just the service name (no login) of the rclone config $1
+    cloud_label "$1" | sed 's/ ([^)]*)$//'
+}
+
+cloud_header_label() {
+    # the service name as the label of the cloud line in the menu header, padded
+    # by hand to the column of the other lines (a shell cannot count Cyrillic letters reliably)
+    case "$(cloud_service "$RCLONE_CONF")" in
+        "Яндекс.Диск") echo "Яндекс.Диск:    " ;;
+        "Облако Mail.ru") echo "Облако Mail.ru: " ;;
+        "pCloud") echo "pCloud:         " ;;
+        "Koofr") echo "Koofr:          " ;;
+        "Fastmail") echo "Fastmail:       " ;;
+        "Mega") echo "Mega:           " ;;
+        WebDAV*) echo "WebDAV:         " ;;
+        *) echo "Облако:         " ;;
+    esac
+}
+
 notify_label() {
     if [ "${NOTIFICATIONS:-true}" = "false" ]; then echo "выключены"; else echo "включены"; fi
+}
+
+sync_mode_label() {
+    case "${SYNC_MODE:-economy}" in
+        full) echo "полная" ;;
+        fast) echo "после каждой игры" ;;
+        *) echo "только при изменениях" ;;
+    esac
 }
 
 keep_days_label() {
@@ -173,6 +387,8 @@ load_config() {
                 MAX_RETRIES) MAX_RETRIES="$value" ;;
                 CONFLICT_KEEP_DAYS) CONFLICT_KEEP_DAYS="$value" ;;
                 NOTIFICATIONS) NOTIFICATIONS="$value" ;;
+                SKIP_UNCHANGED) SKIP_UNCHANGED="$value" ;;
+                SYNC_MODE) SYNC_MODE="$value" ;;
                 MIN_FREE_KB) MIN_FREE_KB="$value" ;;
                 ROMS_SYNC_DIRS) ROMS_SYNC_DIRS="$value" ;;
                 ROMS_SYNC_MEDIA) ROMS_SYNC_MEDIA="$value" ;;
@@ -183,6 +399,10 @@ load_config() {
                 LOG_KEEP_COUNT) LOG_KEEP_COUNT="$value" ;;
             esac
         done < "$CONFIG_FILE"
+        case "$SYNC_MODE" in
+            full|fast|economy) ;;
+            *) if [ "$SKIP_UNCHANGED" = "false" ]; then SYNC_MODE="full"; else SYNC_MODE="economy"; fi ;;
+        esac
         return 0
     else
         create_default_config
@@ -195,7 +415,7 @@ load_config() {
 save_config() {
     cat > "$CONFIG_FILE" << EOF
 # ========================================
-# Save Sync v1.4.6 - Главный конфиг
+# Save Sync v1.4.7 - Главный конфиг
 # ========================================
 
 # ── НАСТРОЙКИ СИНХРОНИЗАЦИИ ──
@@ -203,6 +423,7 @@ SYNC_INTERVAL="$SYNC_INTERVAL"
 MAX_RETRIES="$MAX_RETRIES"
 CONFLICT_KEEP_DAYS="$CONFLICT_KEEP_DAYS"
 NOTIFICATIONS="${NOTIFICATIONS:-true}"
+SYNC_MODE="${SYNC_MODE:-economy}"
 MIN_FREE_KB="$MIN_FREE_KB"
 
 # ── НАСТРОЙКИ РОМОВ ──
@@ -717,7 +938,10 @@ create_engine_script() {
 # Also syncs saves of PortMaster ports: roms/ports/<port>/{saves,conf,gamedata}
 # (only files that look like saves, see port_accept) -> <folder>/_ports/<port>/.
 #
-# Usage: sync_engine.py sync [--web-progress] [--verbose]
+# Usage: sync_engine.py sync [--fast | --mirror] [--web-progress] [--verbose]
+#        (--fast: quick sync after a game - see run())
+#        sync_engine.py check   (exit 0 = nothing changed on this device since the
+#                                last good sync; looks at the local disk only)
 # Env:   SS_RCLONE (rclone binary), SS_EXCLUDED ("snes|PortMaster"), SS_RETRIES
 
 import errno
@@ -732,7 +956,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 
 LANG = "__SS_LANG__"
@@ -755,8 +981,22 @@ PROGRESS_LOG = "/tmp/save_sync_progress.log"
 ENGINE_LOCK = "/tmp/save_sync_engine.lock"
 SANE_TIME = 1704067200               # 2024-01-01: clocks before that are not trusted
 
-SKIP_NAMES = [".first_sync_done", ".DS_Store", "Thumbs.db", "*.log", "*.cache", ".keep", "*.keep",
+SKIP_NAMES = [".first_sync_done", ".DS_Store", "Thumbs.db", "desktop.ini", "._*", "*:Zone.Identifier",
+              "*.log", "*.cache", ".keep", "*.keep", ".gitkeep", "*.tmp", "*.crdownload",
               MANIFEST, "*.partial", ".ss_tmp*"]
+# folders that copying from a Mac, Windows or a NAS leaves behind (lower case): never synced,
+# and they do not make a system "in use" (.Trash-1000 and the like are checked by prefix)
+JUNK_DIRS = {"__macosx", "@eadir", "#recycle", "$recycle.bin", "system volume information", ".trashes",
+             ".spotlight-v100", ".fseventsd", ".documentrevisions-v100", ".stfolder"}
+# Big data that some emulators keep in the saves folder next to the saves (Batocera on a PC):
+# installed games, updates, add-ons, graphic packs. Only the saves themselves are synced.
+HEAVY_PATHS = ("ps3/*dev_hdd0/game/*", "psvita/*ux0/app/*", "psvita/*ux0/patch/*", "psvita/*ux0/addcont/*",
+               "wiiu/*usr/title/*", "wiiu/*graphicpacks/*", "3ds/*/title/*/content/*")
+SAVE_MAX = 512 * 1024 * 1024        # a bigger file is a disk image or a game, not a save
+SKIPPED = {"heavy": set(), "big": {}}
+# saves folders of standalone emulators named not like the ROM folder of their system
+SAVE_DIR_ROMS = {"dolphin-emu": ("gamecube", "wii", "triforce"), "duckstation": ("psx",),
+                 "ymir": ("saturn",), "nanoboyadvance": ("gba",)}
 PORT_SAVE_DIRS = ("saves", "conf")
 # caches of the graphics driver and of emulators: created by every device for its
 # own GPU, useless elsewhere and can grow large - never synced, wherever they are
@@ -766,38 +1006,76 @@ PORT_SKIP_WORDS = ("settings", "config", "options", "controls", "keymap", "gptk"
 PORT_GAMEDATA_EXT = (".ini", ".sav", ".dat", ".json")
 PORT_MAX = 10 * 1024 * 1024
 PORT_GAMEDATA_MAX = 1024 * 1024
+RENAME_MIN = 1024 * 1024                  # renamed in the cloud instead of sent again from this size
 
 MSG = {
     "en": {
         "conflict_local": "Save conflict: {rel} was changed on different devices - kept the newer version from this device",
         "conflict_cloud": "Save conflict: {rel} was changed on different devices - kept the newer version from {dev}",
-        "copy_kept": ", the older one is kept for {days} d. in {dir}",
+        "copy_kept": ", the older one is kept for {days} d. in {dir} (it can be restored in the web interface)",
+        "restored": "Restored the version of {file} from {dev} ({time}); the previous version is kept with the conflicts",
+        "conflict_dropped": "Deleted the conflict copy of {file} ({dev}, {time})",
+        "time_unknown": "time unknown",
         "deleted_here": "Removed here (deleted on another device): {rel}",
         "deleted_cloud": "Removed from the cloud: {rel}",
+        "sent_file": "Sent: {rel}", "recv_file": "Received: {rel}",
+        "renamed": "Renamed in the cloud (not sent again): {old} -> {new}",
+        "copied": "Copied in the cloud (not sent again): {old} -> {new}",
         "guard": "Warning: {n} files look deleted at once ({where}) - that looks like a failure, not a deletion; nothing was deleted",
         "where_here": "on this device", "where_cloud": "in the cloud",
         "summary": "Downloaded: {d}, uploaded: {u}, conflicts: {c}, deleted: {x}",
         "n_sent": "sent: {n}", "n_recv": "received: {n}", "n_del": "deleted: {n}", "n_conf": "conflicts: {n}",
         "no_changes": "no changes",
+        "st_scan": "Checking the saves on the device", "st_compare": "Comparing with the cloud",
+        "st_send": "Sending files: {n}", "st_recv": "Receiving files: {n}",
+        "st_delete": "Deleting files: {n}", "st_finish": "Saving the sync state",
+        "n_guard": "deletion stopped",
+        "n_failed": "not downloaded: {n}",
+        "dl_failed": "Not downloaded (the cloud did not give the file, will try again next time): {rel}",
         "other_device": "another device",
+        "heavy_skip": "{sys}: installed games, updates and add-ons are not synced - only the saves",
+        "big_skip": "Skipped {rel} ({mb} MB): larger than {max} MB - looks like a disk image or an installed game, not a save",
     },
     "ru": {
         "conflict_local": "Конфликт сохранений: {rel} изменён на разных устройствах - оставлена более новая версия с этого устройства",
         "conflict_cloud": "Конфликт сохранений: {rel} изменён на разных устройствах - оставлена более новая версия с {dev}",
-        "copy_kept": ", более старая хранится {days} дн. в {dir}",
+        "copy_kept": ", более старая хранится {days} дн. в {dir} (её можно вернуть в веб-интерфейсе)",
+        "restored": "Возвращена версия {file} с {dev} ({time}); прежняя версия сохранена в конфликтах",
+        "conflict_dropped": "Удалена копия при конфликте: {file} ({dev}, {time})",
+        "time_unknown": "время неизвестно",
         "deleted_here": "Удалено здесь (удалено на другом устройстве): {rel}",
         "deleted_cloud": "Удалено из облака: {rel}",
+        "sent_file": "Отправлено: {rel}", "recv_file": "Получено: {rel}",
+        "renamed": "Переименовано в облаке (без повторной отправки): {old} -> {new}",
+        "copied": "Скопировано в облаке (без повторной отправки): {old} -> {new}",
         "guard": "Предупреждение: сразу {n} файлов выглядят удалёнными ({where}) - похоже на сбой, а не на удаление; ничего не удалено",
         "where_here": "на устройстве", "where_cloud": "в облаке",
         "summary": "Скачано: {d}, выгружено: {u}, конфликтов: {c}, удалено: {x}",
         "n_sent": "отправлено: {n}", "n_recv": "получено: {n}", "n_del": "удалено: {n}", "n_conf": "конфликтов: {n}",
-        "no_changes": "изменений нет",
+        "no_changes": "нет изменений",
+        "st_scan": "Проверка сохранений на устройстве", "st_compare": "Сравнение с облаком",
+        "st_send": "Отправка файлов: {n}", "st_recv": "Получение файлов: {n}",
+        "st_delete": "Удаление файлов: {n}", "st_finish": "Сохранение состояния синхронизации",
+        "n_guard": "удаление остановлено",
+        "n_failed": "не удалось скачать: {n}",
+        "dl_failed": "Не удалось скачать (облако не отдало файл, попробую в следующий раз): {rel}",
         "other_device": "другого устройства",
+        "heavy_skip": "{sys}: установленные игры, обновления и дополнения не синхронизируются - только сохранения",
+        "big_skip": "Пропущен файл {rel} ({mb} МБ): больше {max} МБ - похоже на образ диска или установленную игру, а не на сохранение",
     },
 }
 
 VERBOSE = False
 WEB = False
+FLAGS = {"guard": False, "full": False}     # the guard worked / the cloud has no space left
+
+FULL_RE = re.compile(r"storagequotaexceeded|insufficient[ _]?(storage|space)|over quota|quota[ _]?(is |was )?(exceeded|reached|exhausted)|quotalimitreached|\b507\b|disk[ _]?full|no space left|not enough (free )?space|storage (is )?full", re.I)
+NOT_FULL_RE = re.compile(r"rate[ _]?limit|queries|per minute|per user|too many requests", re.I)
+
+
+def looks_full(text):
+    """Does the rclone error text say that the cloud storage is full (not a request rate limit)?"""
+    return any(FULL_RE.search(line) and not NOT_FULL_RE.search(line) for line in (text or "").splitlines())
 
 
 def keep_days():
@@ -811,6 +1089,23 @@ def keep_days():
 def t(key, **kw):
     text = MSG.get(LANG, MSG["en"])[key]
     return text.format(**kw) if kw else text
+
+
+STAGE_FILE = "/tmp/save_sync_stage.json"
+
+
+def stage(kind, n=0):
+    """What the sync is doing now, for the progress bar of the web interface (saves are
+    small: most of the time goes to comparing with the cloud, not to the transfer)."""
+    if not WEB:
+        return
+    try:
+        tmp = STAGE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"kind": kind, "n": n, "text": t("st_" + kind, n=n)}, f, ensure_ascii=False)
+        os.replace(tmp, STAGE_FILE)
+    except OSError:
+        pass
 
 
 def log(msg):
@@ -829,22 +1124,29 @@ class SyncError(Exception):
 
 # ================================================================== rclone
 def rclone_cmd(args):
-    return [os.environ.get("SS_RCLONE") or "rclone", "--config", RCLONE_CONF] + args
+    # повторы целиком делает движок (MAX_RETRIES), rclone не повторяет сам:
+    # иначе при плохой сети попытки умножаются и синхронизация висит минутами
+    return ([os.environ.get("SS_RCLONE") or "rclone", "--config", RCLONE_CONF] + args +
+            ["--retries", "1", "--contimeout", "15s", "--timeout", "2m"])
 
 
 TIMING = os.environ.get("SS_TIMING") == "1"
 TIMES = {}
 
 
+TIMES_LOCK = threading.Lock()
+
+
 def timed(name, t0):
-    e = TIMES.setdefault(name, [0, 0.0])
-    e[0] += 1
-    e[1] += time.time() - t0
+    with TIMES_LOCK:
+        e = TIMES.setdefault(name, [0, 0.0])
+        e[0] += 1
+        e[1] += time.monotonic() - t0
 
 
 def rclone(args, check=True, stats=False, timeout=3600):
     """Same as _rclone; with SS_TIMING=1 (LOG_LEVEL="debug") it also counts the time per rclone command."""
-    t0 = time.time()
+    t0 = time.monotonic()
     try:
         return _rclone(args, check, stats, timeout)
     finally:
@@ -870,6 +1172,15 @@ def _rclone(args, check=True, stats=False, timeout=3600):
             out = r.stdout.decode("utf-8", "replace")
         if r.returncode == 0 or not check:
             return r.returncode, out
+        err_text = r.stderr.decode("utf-8", "replace") if getattr(r, "stderr", None) else ""
+        if not err_text and stats and WEB:
+            try:
+                with open(PROGRESS_LOG) as ef:
+                    err_text = ef.read()[-4000:]
+            except OSError:
+                pass
+        if looks_full(err_text):
+            FLAGS["full"] = True
         if attempt < retries - 1:
             time.sleep(10)
     raise SyncError("rclone %s: code %d" % (args[0], r.returncode))
@@ -916,6 +1227,75 @@ def refresh_listing(root, C, uploaded, deleted):
     return C2
 
 
+def cloud_list_files(root, rels):
+    """({rel: (size, modtime)}, folder_found) for the given files only (missing ones are
+    left out). folder_found=False: the cloud said the whole folder does not exist."""
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".list") as f:
+        f.write("\n".join(sorted(rels)) + "\n")
+    try:
+        args = ["lsjson", "-R", "--files-only", "--no-mimetype", "--files-from-raw", f.name, root.remote]
+        rc, out = rclone(args, check=False)
+        if rc == 3:           # the folder does not exist in the cloud
+            return {}, False
+        if rc != 0:
+            rc, out = rclone(args)
+    finally:
+        os.remove(f.name)
+    try:
+        return {i["Path"]: (i.get("Size", -1), i.get("ModTime", "")) for i in json.loads(out or "[]")}, True
+    except (ValueError, KeyError, TypeError):
+        raise SyncError("lsjson: bad output")
+
+
+def fast_candidates(root, base, L, M):
+    """Files the quick sync looks at: changed or deleted here, the ones the manifest says
+    another device changed or added, and the ones missing from the manifest (deleted on
+    another device - or a manifest that is not complete: the cloud itself is asked about
+    all of them, and only a file the cloud really does not have is deleted here)."""
+    cand = set()
+    for rel, l in L.items():
+        b = base.get(rel)
+        if not b or b.get("h") != l["h"]:
+            cand.add(rel)
+    cand.update(rel for rel in base if rel not in L)
+    for rel, m in M.items():
+        if not isinstance(m, dict) or not m.get("h") or not root.accept(rel, m.get("s")):
+            continue
+        b = base.get(rel)
+        if not b or b.get("h") != m["h"]:
+            cand.add(rel)
+    cand.update(rel for rel in base if rel not in M)
+    return cand
+
+
+def download_some(remote, dest, rels, stats=False, want=None):
+    """Downloads the files; returns the ones that did not arrive. The cloud sometimes
+    refuses single files for a while (Yandex: "503 Service Unavailable"): one such file
+    must not stop the whole sync or hang it for minutes - it is tried once more and
+    then left for the next sync."""
+    left = list(rels)
+    for attempt in range(2):
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".list") as f:
+            f.write("\n".join(left) + "\n")
+        try:
+            rc, _ = rclone(["copy", remote, dest, "--files-from-raw", f.name, "--ignore-times",
+                            "--low-level-retries", "3"], check=False, stats=stats)
+        finally:
+            os.remove(f.name)
+        if rc == 0:
+            return []
+        def arrived(r):
+            p = os.path.join(dest, *r.split("/"))
+            # a file that was here before counts only with the expected content
+            return os.path.isfile(p) and (not (want or {}).get(r) or md5(p) == want[r])
+        left = [r for r in left if not arrived(r)]
+        if not left:
+            return []
+        if attempt == 0:
+            time.sleep(5)
+    return left
+
+
 def parse_time(s):
     """rclone ModTime (RFC3339, any precision) -> epoch seconds, 0 if unknown."""
     m = re.match(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.\d+)?(Z|[+-]\d\d:\d\d)?", s or "")
@@ -939,9 +1319,14 @@ def skip_name(name):
     return any(fnmatch.fnmatch(name, p) for p in SKIP_NAMES)
 
 
+def junk_dir(name):
+    low = name.lower()
+    return low in JUNK_DIRS or low.startswith(".trash-")
+
+
 def skip_path(parts):
-    """Leftovers of an interrupted run and cache folders are never synced."""
-    return any(p.startswith(".ss_tmp") or p.lower() in CACHE_DIRS for p in parts[:-1])
+    """Leftovers of an interrupted run, cache folders and junk folders are never synced."""
+    return any(p.startswith(".ss_tmp") or p.lower() in CACHE_DIRS or junk_dir(p) for p in parts[:-1])
 
 
 QUIET_EXT = (".png", ".jpg", ".jpeg", ".bmp")
@@ -965,15 +1350,29 @@ class Root:
         return "%s/%s.%s" % (CONFLICTS, sub, tag)
 
 
-NOT_ROMS_EXT = (".xml", ".txt", ".dat", ".log", ".cache")
-NOT_ROMS_DIRS = {"images", "media", "videos"}
+# What in a ROM folder is not a game. Not .png and .json: PICO-8 games are .p8.png pictures.
+NOT_ROMS_EXT = (".xml", ".txt", ".dat", ".log", ".cache", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
+                ".mp4", ".avi", ".mkv", ".webm", ".pdf", ".nfo", ".md", ".db", ".tmp", ".bak",
+                ".crdownload", ".partial")
+NOT_ROMS_NAMES = {".ds_store", "thumbs.db", "desktop.ini", ".keep", ".gitkeep", ".localized"}
+# scraped media (Batocera, KNULLI, ES-DE, Skraper)
+NOT_ROMS_DIRS = {"images", "media", "videos", "manuals", "bezels", "covers", "backcovers", "3dboxes", "fanart",
+                 "marquees", "miximages", "miximages_v2", "physicalmedia", "screenshots", "thumbnails",
+                 "titlescreens", "wheel", "boxart", "snaps", "downloaded_images", "downloaded_videos",
+                 "downloaded_media"}
+
+
+def _not_a_game(name):
+    low = name.lower()
+    return (low.endswith(NOT_ROMS_EXT) or low in NOT_ROMS_NAMES or low.startswith("._")
+            or low.endswith(":zone.identifier"))
 
 
 def _has_files(path, skip_media):
     for root, dirs, files in os.walk(path):
-        if skip_media:
-            dirs[:] = [d for d in dirs if d.lower() not in NOT_ROMS_DIRS]
-        if any(not f.lower().endswith(NOT_ROMS_EXT) for f in files):
+        dirs[:] = [d for d in dirs if not junk_dir(d) and d.lower() not in CACHE_DIRS
+                   and not (skip_media and (d.lower() in NOT_ROMS_DIRS or d.startswith(".")))]
+        if any(not _not_a_game(f) for f in files):
             return True
     return False
 
@@ -990,8 +1389,11 @@ def make_system_active():
         if system not in cache:
             ok = not roms_known             # no ROMs folder to judge by: sync everything
             if not ok:
-                d = os.path.join(ROMS_DIR, system)
-                ok = os.path.isdir(d) and _has_files(d, True)
+                for name in (system,) + SAVE_DIR_ROMS.get(system, ()):
+                    d = os.path.join(ROMS_DIR, name)
+                    if os.path.isdir(d) and _has_files(d, True):
+                        ok = True
+                        break
             if not ok:
                 d = os.path.join(SAVE_DIR, system)
                 ok = os.path.isdir(d) and _has_files(d, False)
@@ -1009,8 +1411,36 @@ def saves_accept(ex):
             return False
         if len(parts) > 1 and not active(parts[0]):
             return False
-        return not skip_name(parts[-1])
+        if skip_name(parts[-1]):
+            return False
+        if len(parts) > 2 and any(fnmatch.fnmatchcase(rel.lower(), p) for p in HEAVY_PATHS):
+            SKIPPED["heavy"].add(parts[0])
+            return False
+        if size is not None and size > SAVE_MAX:
+            SKIPPED["big"][rel] = size
+            return False
+        return True
     return accept
+
+
+SKIPPED_FILE = os.path.join(BASE_DIR, ".sync_skipped.json")
+
+
+def note_skipped():
+    """Says once in the log what is not synced on purpose (installed games of PS3, PS Vita,
+    Wii U, 3DS; files too big for a save), and again only in the detailed log mode."""
+    seen = set(load_json(SKIPPED_FILE, []))
+    now = {"heavy:" + x for x in SKIPPED["heavy"]} | {"big:" + x for x in SKIPPED["big"]}
+    for key in sorted(now):
+        if key in seen and not VERBOSE:
+            continue
+        kind, what = key.split(":", 1)
+        if kind == "heavy":
+            log(t("heavy_skip", sys=what))
+        else:
+            log(t("big_skip", rel=what, mb=SKIPPED["big"][what] // (1024 * 1024), max=SAVE_MAX // (1024 * 1024)))
+    if now - seen:
+        save_json(SKIPPED_FILE, sorted(seen | now))
 
 
 def port_accept(rel, size):
@@ -1063,7 +1493,7 @@ def md5(path):
 
 
 def local_list(root, base):
-    t0 = time.time()
+    t0 = time.monotonic()
     try:
         return _local_list(root, base)
     finally:
@@ -1101,6 +1531,50 @@ def _local_list(root, base):
                 h = md5(full)
             out[rel] = {"h": h, "s": st.st_size, "m": m, "ns": ns}
     return out
+
+
+def unchanged_here():
+    """True when nothing on this device changed since the last good sync: the same saves,
+    with the same size and modification time as in the base (a file whose time differs is
+    read and compared by content). Looks at the local disk only - no cloud, no manifest.
+    Any doubt gives False, and then the normal sync runs."""
+    base_roots = load_json(BASE_FILE, {}).get("roots")
+    if not isinstance(base_roots, dict) or not base_roots:
+        return False                    # no successful sync yet
+    now = time.time()
+    for root in roots():
+        base = base_roots.get(root.name) or {}
+        seen = 0
+        if os.path.isdir(root.local):
+            for dp, dns, fns in os.walk(root.local):
+                dns[:] = [d for d in dns if not os.path.islink(os.path.join(dp, d))]
+                for fn in fns:
+                    full = os.path.join(dp, fn)
+                    if os.path.islink(full):
+                        continue
+                    rel = os.path.relpath(full, root.local).replace(os.sep, "/")
+                    try:
+                        st = os.stat(full)
+                    except OSError:
+                        return False
+                    if not root.accept(rel, st.st_size):
+                        continue
+                    b = base.get(rel)
+                    if not b or not b.get("h"):
+                        return False    # a new file
+                    if b.get("s") == st.st_size and b.get("ns") == st.st_mtime_ns and abs(now - st.st_mtime) >= 10:
+                        seen += 1
+                        continue
+                    try:
+                        same = md5(full) == b["h"]      # rewritten by the emulator with the same content?
+                    except OSError:
+                        return False
+                    if not same:
+                        return False
+                    seen += 1
+        if seen != len(base):
+            return False                # something was deleted here (or the filters changed)
+    return True
 
 
 # ================================================================== state
@@ -1144,7 +1618,7 @@ def device_name():
 
 
 # ================================================================== the sync
-def run():
+def run(fast=False):
     now = int(time.time())
     clock_ok = now > SANE_TIME
     dev = device_name()
@@ -1152,30 +1626,80 @@ def run():
     base_all = load_json(BASE_FILE, {})
     base_roots = base_all.get("roots", {})
     new_base_roots = {}
-    total = {"d": 0, "u": 0, "c": 0, "x": 0}
+    total = {"d": 0, "u": 0, "c": 0, "x": 0, "f": 0}
 
-    saves_listing = None            # the whole cloud folder, listed once (it holds the port folders too)
-    for root in roots():
-        base = base_roots.get(root.name, {})
-        L = local_list(root, base)
+    # the cloud folder is listed once (it holds the port folders too) and the manifests of
+    # all folders are read at the same time: every read is a request of its own
+    all_roots = roots()
+    stage("compare")
+
+    # Quick sync (after a game, setting "Sync after a game" = quick/economy): no full
+    # listing of the cloud folder. What other devices changed, added or deleted comes
+    # from the manifests; the cloud itself is asked only about those files and the ones
+    # changed here (a file is deleted here only when the cloud confirms it is gone).
+    # Anything unusual - first sync, a folder without a manifest - gives the full sync.
+    manifest_reads = None
+    if fast:
+        if not base_roots:
+            fast = False
+        else:
+            def read_any_manifest(root):
+                if not base_roots.get(root.name):
+                    return 1, ""        # nothing synced in this folder yet: new saves there come with the full sync
+                return rclone(["cat", root.remote + "/" + MANIFEST], check=False)
+            if len(all_roots) > 1:
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    manifest_reads = dict(zip([r.name for r in all_roots], pool.map(read_any_manifest, all_roots)))
+            else:
+                manifest_reads = {r.name: read_any_manifest(r) for r in all_roots}
+            for root in all_roots:
+                if root.name not in base_roots or (manifest_reads[root.name][0] != 0 and base_roots[root.name]):
+                    fast = False
+                    break
+    listings = {r.name: {} for r in all_roots}
+    saves_listing = None
+    for root in ([] if fast else all_roots):
         if root.name == "saves":
             saves_listing = cloud_list(root.remote)
-            listing = saves_listing
+            listings[root.name] = saves_listing
         elif saves_listing is not None and root.remote.startswith(REMOTE + "/"):
             prefix = root.remote[len(REMOTE) + 1:] + "/"
-            listing = {r[len(prefix):]: v for r, v in saves_listing.items() if r.startswith(prefix)}
+            listings[root.name] = {r[len(prefix):]: v for r, v in saves_listing.items() if r.startswith(prefix)}
         else:
-            listing = cloud_list(root.remote)
+            listings[root.name] = cloud_list(root.remote)
+
+    def read_manifest(root):
+        if MANIFEST in listings[root.name]:
+            return rclone(["cat", root.remote + "/" + MANIFEST], check=False)
+        return 1, ""                    # the listing shows there is no manifest yet
+
+    if fast:
+        pass                            # already read above
+    elif len(all_roots) > 1:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            manifest_reads = dict(zip([r.name for r in all_roots], pool.map(read_manifest, all_roots)))
+    else:
+        manifest_reads = {r.name: read_manifest(r) for r in all_roots}
+
+    for root in all_roots:
+        base = base_roots.get(root.name, {})
+        L = local_list(root, base)
+        if root.name == "saves" and not fast:
+            note_skipped()
+        listing = listings[root.name]
         C = {r: v for r, v in listing.items() if root.accept(r, v[0])}
-        if MANIFEST in listing:
-            rc, mout = rclone(["cat", root.remote + "/" + MANIFEST], check=False)
-        else:
-            rc, mout = 1, ""            # the listing shows there is no manifest yet
+        rc, mout = manifest_reads[root.name]
         try:
             M = json.loads(mout) if rc == 0 and mout.strip() else {}
         except ValueError:
             M = {}
         M = M.get("files", {}) if isinstance(M, dict) else {}
+        cand = None
+        cloud_seen = True
+        if fast:
+            cand = fast_candidates(root, base, L, M)
+            listed, cloud_seen = cloud_list_files(root, cand) if cand else ({}, True)
+            C = {r: v for r, v in listed.items() if root.accept(r, v[0])}
 
         # ---- what is in the cloud, by CONTENT (cloud file dates are not reliable:
         # some services report another date later, some none at all).
@@ -1201,7 +1725,8 @@ def run():
             lst = os.path.join(tmpdir, ".list")
             with open(lst, "w") as f:
                 f.write("\n".join(need) + "\n")
-            rclone(["copy", root.remote, tmpdir, "--files-from-raw", lst, "--ignore-times"])
+            os.remove(lst)
+            download_some(root.remote, tmpdir, need)
             for rel in need:
                 p = os.path.join(tmpdir, *rel.split("/"))
                 if os.path.isfile(p):
@@ -1209,9 +1734,21 @@ def run():
                     fetched[rel] = p
 
         up, down, del_cloud, del_local, same = [], [], [], [], []
+        deferred = []
+        renamed = []                    # (old name, new name) moved inside the cloud
+        copied = []                     # (source, new name) copied inside the cloud
         conflicts = []
 
-        for rel in sorted(set(L) | set(C) | set(base)):
+        # a cloud file whose content could not be fetched is not decided about this time
+        unfetched = {r for r in need if r not in known}
+        failed_down = set()
+        for rel in sorted(unfetched):
+            if not quiet_in_log(rel):
+                log(t("dl_failed", rel=root.label(rel)))
+
+        for rel in sorted(cand if fast else set(L) | set(C) | set(base)):
+            if rel in unfetched:
+                continue
             b, l, c = base.get(rel), L.get(rel), C.get(rel)
             ch = known.get(rel)
             lc = (l is None) != (b is None) or (l is not None and b is not None and l["h"] != b["h"])
@@ -1256,13 +1793,20 @@ def run():
                 lt = L[rel]["m"] if clock_ok else -1
                 (won_local if lt > ct else won_cloud).append(rel)
 
+            # quick sync: if the cloud said that the whole folder is missing, nothing is
+            # deleted here on that word - the full sync looks at it
+            if fast and del_local and not cloud_seen:
+                deferred, del_local = del_local, []
+
             # mass-deletion guard: an empty listing is a failure, not a deletion
             limit = max(5, len(base) // 2)
             if len(del_local) > limit:
                 log(t("guard", n=len(del_local), where=t("where_cloud")))
+                FLAGS["guard"] = True
                 del_local = []
             if len(del_cloud) > limit:
                 log(t("guard", n=len(del_cloud), where=t("where_here")))
+                FLAGS["guard"] = True
                 del_cloud = []
 
             done = set()
@@ -1275,18 +1819,100 @@ def run():
                 for rel in won_cloud:
                     rclone(["copyto", os.path.join(root.local, *rel.split("/")), root.conflict_path(rel, "%s.%s" % (dev, stamp))])
 
-            # 2. uploads
+            # 2. a file that only got another name (save slots shift when one is
+            # deleted: .state2 becomes .state1) is already in the cloud under the old
+            # name: a big one is renamed there instead of being sent again. A rename is
+            # not free on a slow cloud (several seconds each), so small files - and the
+            # slot pictures - simply go with the other uploads in one call.
+            if up and del_cloud:
+                gone = {}
+                for rel in del_cloud:
+                    b = base.get(rel)
+                    if b and b.get("h"):
+                        gone.setdefault((b["h"], b.get("s")), []).append(rel)
+                pairs = []
+                for rel in up:
+                    if L[rel]["s"] < RENAME_MIN:
+                        continue
+                    pool = gone.get((L[rel]["h"], L[rel]["s"]))
+                    if pool:
+                        pairs.append((pool.pop(), rel))
+
+                def move(pair):
+                    src, dst = pair
+                    # --ignore-times: without it rclone takes a same-size file with a close date
+                    # for "the same" and only deletes the old name - the new content would be lost
+                    return rclone(["moveto", root.remote + "/" + src, root.remote + "/" + dst, "--ignore-times"], check=False)[0]
+
+                if pairs:
+                    if len(pairs) > 1:
+                        with ThreadPoolExecutor(max_workers=4) as pool_ex:
+                            codes = list(pool_ex.map(move, pairs))
+                    else:
+                        codes = [move(pairs[0])]
+                    for (src, dst), rc_mv in zip(pairs, codes):
+                        if rc_mv != 0:
+                            continue        # did not work: sent and deleted the usual way
+                        renamed.append((src, dst))
+                        up.remove(dst)
+                        del_cloud.remove(src)
+                        done.update((src, dst))
+                        if TIMING:
+                            log(t("renamed", old=root.label(src), new=root.label(dst)))
+
+            # 3. a big file whose new content is already in the cloud under another name
+            # that stays (after a new save the slots shift: one slot gets what the
+            # next one had, and that one gets the new save) is copied inside the
+            # cloud - before the uploads below overwrite the source
+            if up:
+                moved_away = {src for src, _ in renamed}
+                cloud_has = {}
+                for rel in C:
+                    h = known.get(rel)
+                    if h and rel not in moved_away:
+                        cloud_has.setdefault((h, C[rel][0]), rel)
+                for src, dst in renamed:
+                    cloud_has.setdefault((L[dst]["h"], L[dst]["s"]), dst)
+                cpairs = []
+                for rel in up:
+                    if L[rel]["s"] < RENAME_MIN:
+                        continue
+                    src = cloud_has.get((L[rel]["h"], L[rel]["s"]))
+                    if src and src != rel:
+                        cpairs.append((src, rel))
+
+                def copy_in_cloud(pair):
+                    src, dst = pair
+                    return rclone(["copyto", root.remote + "/" + src, root.remote + "/" + dst, "--ignore-times"], check=False)[0]
+
+                if cpairs:
+                    if len(cpairs) > 1:
+                        with ThreadPoolExecutor(max_workers=4) as pool_ex:
+                            codes = list(pool_ex.map(copy_in_cloud, cpairs))
+                    else:
+                        codes = [copy_in_cloud(cpairs[0])]
+                    for (src, dst), rc_cp in zip(cpairs, codes):
+                        if rc_cp != 0:
+                            continue        # did not work: sent the usual way
+                        copied.append((src, dst))
+                        up.remove(dst)
+                        done.add(dst)
+                        if TIMING:
+                            log(t("copied", old=root.label(src), new=root.label(dst)))
+
+            # 4. uploads
             ups = up + won_local
             if ups:
+                stage("send", len(ups))
                 with tempfile.NamedTemporaryFile("w", delete=False, suffix=".list") as f:
                     f.write("\n".join(ups) + "\n")
                 try:
-                    rclone(["copy", root.local, root.remote, "--files-from-raw", f.name, "--ignore-times"], stats=True)
+                    rclone(["copy", root.local, root.remote, "--files-from-raw", f.name, "--ignore-times", "--no-check-dest"], stats=True)
                 finally:
                     os.remove(f.name)
                 done.update(ups)
 
-            # 3. downloads (conflicts already fetched are moved into place)
+            # 5. downloads (conflicts already fetched are moved into place)
             downs = [r for r in down + won_cloud if r not in fetched]
             for rel in down + won_cloud:
                 if rel in fetched:
@@ -1295,17 +1921,26 @@ def run():
                     shutil.move(fetched[rel], dst)
                     done.add(rel)
             if downs:
+                stage("recv", len(downs))
                 os.makedirs(root.local, exist_ok=True)
-                with tempfile.NamedTemporaryFile("w", delete=False, suffix=".list") as f:
-                    f.write("\n".join(downs) + "\n")
-                try:
-                    rclone(["copy", root.remote, root.local, "--files-from-raw", f.name, "--ignore-times"], stats=True)
-                finally:
-                    os.remove(f.name)
-                done.update(downs)
+                # files that already existed here are compared by content: an old copy
+                # must not be taken for a downloaded one
+                failed_down = set(download_some(root.remote, root.local, downs, stats=True, want=known))
+                for rel in downs:
+                    if rel in failed_down:
+                        continue
+                    p = os.path.join(root.local, *rel.split("/"))
+                    want = known.get(rel)
+                    if want and os.path.isfile(p) and md5(p) != want:
+                        failed_down.add(rel)
+                for rel in sorted(failed_down):
+                    if not quiet_in_log(rel):
+                        log(t("dl_failed", rel=root.label(rel)))
+                done.update(r for r in downs if r not in failed_down)
 
-            # 4. deletions (the copies are already in _conflicts)
+            # 6. deletions (the copies are already in _conflicts)
             if del_cloud:
+                stage("delete", len(del_cloud))
                 # one call for all files (each rclone call takes seconds on a slow cloud)
                 with tempfile.NamedTemporaryFile("w", delete=False, suffix=".list") as f:
                     f.write("\n".join(del_cloud) + "\n")
@@ -1313,7 +1948,7 @@ def run():
                     rclone(["delete", root.remote, "--files-from-raw", f.name])
                 finally:
                     os.remove(f.name)
-            for rel in del_cloud:
+            for rel in del_cloud + [src for src, _ in renamed]:
                 if not quiet_in_log(rel):
                     log(t("deleted_cloud", rel=root.label(rel)))
                 done.add(rel)
@@ -1325,6 +1960,15 @@ def run():
                 if not quiet_in_log(rel):
                     log(t("deleted_here", rel=root.label(rel)))
                 done.add(rel)
+
+            # debug log (LOG_LEVEL="debug"): which files were sent and received
+            if TIMING:
+                for rel in up:
+                    if not quiet_in_log(rel):
+                        log(t("sent_file", rel=root.label(rel)))
+                for rel in down:
+                    if rel not in failed_down and not quiet_in_log(rel):
+                        log(t("recv_file", rel=root.label(rel)))
 
             tail = t("copy_kept", days=keep, dir=CONFLICTS.split(":", 1)[-1]) if keep else ""
             for rel in won_local:
@@ -1342,14 +1986,17 @@ def run():
         # counted like the log: pictures (state thumbnails, screenshots) are not counted
         def n(rels):
             return sum(1 for r in rels if not quiet_in_log(r))
-        total["d"] += n(down) + n(won_cloud)
-        total["u"] += n(up) + n(won_local)
+        total["d"] += n([r for r in down + won_cloud if r not in failed_down])
+        total["f"] += n(failed_down) + n(unfetched)
+        total["u"] += n(up) + n(won_local) + n([d for _, d in renamed]) + n([d for _, d in copied])
         total["c"] += n(conflicts)
-        total["x"] += n(del_cloud) + n(del_local)
+        total["x"] += n(del_cloud) + n(del_local) + n([s for s, _ in renamed])
 
         # ---- new state: everything that is now the same on both sides
-        changed_cloud = bool(up or won_local or del_cloud)
-        C2 = refresh_listing(root, C, set(up) | set(won_local), set(del_cloud)) if changed_cloud else C
+        moved_to = {d for _, d in renamed} | {d for _, d in copied}
+        moved_from = {s for s, _ in renamed}
+        changed_cloud = bool(up or won_local or del_cloud or renamed or copied)
+        C2 = refresh_listing(root, C, set(up) | set(won_local) | moved_to, set(del_cloud) | moved_from) if changed_cloud else C
         L2 = local_list(root, base)
         nb = {}
         for rel in set(same) | done:
@@ -1357,21 +2004,40 @@ def run():
             if l is None or c is None:
                 continue
             nb[rel] = {"h": l["h"], "s": l["s"], "m": l["m"], "ns": l["ns"], "cs": c[0], "ct": c[1]}
+        if fast:
+            # what the quick sync did not look at stays as it was at the last sync
+            for rel, b in base.items():
+                if rel not in nb and (rel not in cand or rel in deferred):
+                    nb[rel] = b
+        # not downloaded / not fetched: as it was, so the next sync tries again
+        for rel in failed_down | unfetched:
+            if rel in base:
+                nb[rel] = base[rel]
+            else:
+                nb.pop(rel, None)
         new_base_roots[root.name] = nb
 
         # ---- manifest in the cloud: who wrote which version, and when. It is read
         # again right before writing, so what another device wrote meanwhile stays.
-        uploaded = set(up) | set(won_local)
+        uploaded = set(up) | set(won_local) | moved_to
 
         def build_manifest(fresh):
             newM = dict(fresh)
             for rel in list(newM):
-                if not root.accept(rel, None):
-                    continue            # not ours (excluded, or no games here): another device's entry stays
-                if rel not in C2 or rel in del_cloud:
+                if not root.accept(rel, (newM[rel] or {}).get("s") if isinstance(newM[rel], dict) else None):
+                    continue            # not ours (excluded, no games here, too big): another device's entry stays
+                if fast and rel not in cand:
+                    continue            # the quick sync did not look at it in the cloud
+                if rel not in C2 or rel in del_cloud or rel in moved_from:
                     newM.pop(rel, None)
             for rel, e in nb.items():
-                c = C2[rel]
+                if fast and rel not in cand:
+                    continue
+                if rel in failed_down or rel in unfetched:
+                    continue
+                c = C2.get(rel)
+                if c is None:
+                    continue
                 old_e = newM.get(rel) or M.get(rel) or {}
                 if rel in uploaded:
                     newM[rel] = {"h": e["h"], "s": c[0], "ct": c[1], "d": dev, "t": L2[rel]["m"]}
@@ -1394,7 +2060,8 @@ def run():
             newM = build_manifest(fresh)
         if newM != fresh:
             data = json.dumps({"version": 1, "files": newM}, ensure_ascii=False, separators=(",", ":")).encode()
-            t0 = time.time()
+            t0 = time.monotonic()
+            stage("finish")
             subprocess.run(rclone_cmd(["rcat", root.remote + "/" + MANIFEST]), input=data,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if TIMING:
@@ -1409,7 +2076,7 @@ def run():
     # a day, or right away after the setting changed). The age is taken from the
     # date in the copy's name, i.e. from the moment the conflict happened.
     keep = keep_days()
-    if clock_ok and (now - base_all.get("cleaned", 0) > 86400 or base_all.get("cleaned_keep") != keep):
+    if not fast and clock_ok and (now - base_all.get("cleaned", 0) > 86400 or base_all.get("cleaned_keep") != keep):
         if clean_conflicts(keep, now):
             base_all["cleaned"] = now
             base_all["cleaned_keep"] = keep
@@ -1418,6 +2085,10 @@ def run():
     summary = t("summary", d=total["d"], u=total["u"], c=total["c"], x=total["x"])
     # short note for the "Saves uploaded / downloaded" log line of the calling script
     parts = [t(k, n=total[v]) for k, v in (("n_sent", "u"), ("n_recv", "d"), ("n_del", "x"), ("n_conf", "c")) if total[v]]
+    if total["f"]:
+        parts.append(t("n_failed", n=total["f"]))
+    if FLAGS["guard"]:
+        parts.append(t("n_guard"))
     res = os.environ.get("SS_RESULT")
     if res:
         try:
@@ -1432,10 +2103,93 @@ def run():
     return 0
 
 
+def run_mirror():
+    """"Change cloud" -> "make the cloud a copy of this device": the cloud folder becomes
+    exactly what is on this device - missing files are sent, different ones replaced,
+    extra ones deleted; nothing is compared by date. Systems this device has no games
+    for (and excluded ones) are not touched. Afterwards the memory says: cloud = device."""
+    dev = device_name()
+    new_base_roots = {}
+    total = {"u": 0, "x": 0}
+    for root in roots():
+        L = local_list(root, {})
+        listing = cloud_list(root.remote)
+        C = {r: v for r, v in listing.items() if root.accept(r, v[0])}
+        M = {}
+        if MANIFEST in listing:
+            rc, mout = rclone(["cat", root.remote + "/" + MANIFEST], check=False)
+            try:
+                M = json.loads(mout).get("files", {}) if rc == 0 and mout.strip() else {}
+            except (ValueError, AttributeError):
+                M = {}
+        # a file the cloud already has with the same content (the manifest says so) is not sent again
+        up = [r for r in sorted(L)
+              if not (r in C and (M.get(r) or {}).get("h") == L[r]["h"] and (M.get(r) or {}).get("s") == C[r][0])]
+        dels = [r for r in sorted(C) if r not in L]
+        if up:
+            with tempfile.NamedTemporaryFile("w", delete=False, suffix=".list") as f:
+                f.write("\n".join(up) + "\n")
+            try:
+                rclone(["copy", root.local, root.remote, "--files-from-raw", f.name, "--ignore-times", "--no-check-dest"], stats=True)
+            finally:
+                os.remove(f.name)
+            if TIMING:
+                for rel in up:
+                    if not quiet_in_log(rel):
+                        log(t("sent_file", rel=root.label(rel)))
+        if dels:
+            with tempfile.NamedTemporaryFile("w", delete=False, suffix=".list") as f:
+                f.write("\n".join(dels) + "\n")
+            try:
+                rclone(["delete", root.remote, "--files-from-raw", f.name])
+            finally:
+                os.remove(f.name)
+            for rel in dels:
+                if not quiet_in_log(rel):
+                    log(t("deleted_cloud", rel=root.label(rel)))
+        total["u"] += sum(1 for r in up if not quiet_in_log(r))
+        total["x"] += sum(1 for r in dels if not quiet_in_log(r))
+        C2 = refresh_listing(root, C, set(up), set(dels)) if (up or dels) else C
+        nb = {}
+        for rel, l in L.items():
+            c = C2.get(rel)
+            if c is not None:
+                nb[rel] = {"h": l["h"], "s": l["s"], "m": l["m"], "ns": l["ns"], "cs": c[0], "ct": c[1]}
+        new_base_roots[root.name] = nb
+        # manifest: entries of systems this device does not sync stay as they are
+        newM = {rel: e for rel, e in M.items() if not root.accept(rel, e.get("s") if isinstance(e, dict) else None)}
+        for rel, e in nb.items():
+            old = M.get(rel) or {}
+            sent = rel in up
+            newM[rel] = {"h": e["h"], "s": e["cs"], "ct": e["ct"],
+                         "d": dev if sent or not old.get("d") else old["d"], "t": L[rel]["m"]}
+        if newM != M:
+            data = json.dumps({"version": 1, "files": newM}, ensure_ascii=False, separators=(",", ":")).encode()
+            stage("finish")
+            subprocess.run(rclone_cmd(["rcat", root.remote + "/" + MANIFEST]), input=data,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    save_json(BASE_FILE, {"roots": new_base_roots, "device": dev})
+    parts = [t(k, n=total[v]) for k, v in (("n_sent", "u"), ("n_del", "x")) if total[v]]
+    res = os.environ.get("SS_RESULT")
+    if res:
+        try:
+            with open(res, "w") as f:
+                f.write(", ".join(parts) or t("no_changes"))
+        except OSError:
+            pass
+    print(", ".join(parts) or t("no_changes"))
+    return 0
+
+
 STAMP_RE = re.compile(r"\.(\d{4})-(\d\d)-(\d\d)_(\d\d)-(\d\d)-(\d\d)(?:\.deleted)?$")
 
 
 def clean_conflicts(keep, now):
+    """Removes conflict copies older than the setting of this device. A device that keeps
+    no copies (0) does not touch them at all: copies made by other devices stay for as
+    long as those devices keep them."""
+    if keep <= 0:
+        return True
     items = cloud_list(CONFLICTS)
     if not items:
         return True
@@ -1451,7 +2205,7 @@ def clean_conflicts(keep, now):
                 made = parse_time(mt)
         else:
             made = parse_time(mt)
-        if keep == 0 or made < limit:
+        if made < limit:
             old.append(rel)
     if old:
         with tempfile.NamedTemporaryFile("w", delete=False, suffix=".list") as f:
@@ -1464,29 +2218,256 @@ def clean_conflicts(keep, now):
     return True
 
 
+# ================================================================== conflict copies
+# <folder>_conflicts/<path>.<device>.<YYYY-MM-DD_hh-mm-ss>: the version that lost a conflict
+CONFLICT_RE = re.compile(r"^(.+)\.([A-Za-z0-9_-]+)\.(\d{4}-\d\d-\d\d_\d\d-\d\d-\d\d|time-unknown-\d+)(\.deleted)?$")
+
+
+def conflict_info(cid, mt=""):
+    """What a conflict copy is: the save it belongs to, from which device and when.
+    None for anything that is not a conflict copy or points outside the save folders."""
+    m = CONFLICT_RE.match(cid or "")
+    if not m:
+        return None
+    sub, dev, stamp, _deleted = m.groups()
+    parts = sub.split("/")
+    if any(p in ("", ".", "..") or p.startswith(".ss_tmp") for p in parts):
+        return None
+    if parts[0] == PORTS_CLOUD:
+        if len(parts) < 3 or parts[1] in PORT_NOT_GAMES:
+            return None
+        rel = "/".join(parts[2:])
+        local = os.path.join(ROMS_DIR, "ports", parts[1], *parts[2:])
+        label = "ports/%s/%s" % (parts[1], rel)
+        ex = excluded()
+        synced = PORTS_KEY not in ex and port_accept(rel, None)
+    else:
+        local = os.path.join(SAVE_DIR, *parts)
+        label = sub
+        synced = saves_accept(excluded())(sub, None)
+    made = None
+    sm = STAMP_RE.search("." + stamp)
+    if sm:
+        y, mo, d, h, mi, se = (int(x) for x in sm.groups())
+        try:
+            made = time.mktime((y, mo, d, h, mi, se, 0, 0, -1))
+        except (OverflowError, ValueError):
+            made = None
+    if made is None and mt:
+        made = parse_time(mt)
+    return {"id": cid, "sub": sub, "file": label, "dev": dev, "local": local, "synced": bool(synced),
+            "ts": int(made or 0), "time": time.strftime("%d.%m %H:%M", time.localtime(made)) if made else t("time_unknown")}
+
+
+def list_conflicts():
+    """Conflict copies of saves. Pictures (save-state thumbnails like game.state.png) are
+    not listed: they are restored and deleted together with their save."""
+    keep = keep_days()
+    now = time.time()
+    out = []
+    for cid, (size, mt) in cloud_list(CONFLICTS).items():
+        info = conflict_info(cid, mt)
+        if not info or quiet_in_log(info["sub"]):
+            continue
+        left = keep - int((now - info["ts"]) // 86400) if info["ts"] else keep
+        # kept at least until the conflict time + the setting of this device; old copies
+        # are removed by a full sync (at most once a day), so it can stay a little longer
+        until = info["ts"] + keep * 86400 if info["ts"] and keep else 0
+        info.update({"size": size, "left": max(0, left), "keep": keep,
+                     "until": time.strftime("%d.%m %H:%M", time.localtime(until)) if until > now else "",
+                     "here": os.path.exists(info.pop("local"))})
+        out.append(info)
+    out.sort(key=lambda x: (-x["ts"], x["file"]))
+    return out
+
+
+def version_device(info, target):
+    """Which device made the save that is here now: the manifest in the cloud says who
+    wrote each version; if this one is not there (changed here), it is this device."""
+    parts = info["sub"].split("/")
+    if parts[0] == PORTS_CLOUD:
+        remote, rel = "%s/%s/%s" % (REMOTE, PORTS_CLOUD, parts[1]), "/".join(parts[2:])
+    else:
+        remote, rel = REMOTE, info["sub"]
+    try:
+        rc, out = rclone(["cat", remote + "/" + MANIFEST], check=False)
+        e = (json.loads(out).get("files") or {}).get(rel) if rc == 0 and out else None
+        if e and e.get("d") and e.get("h") == md5(target) and re.match(r"^[A-Za-z0-9_-]+$", e["d"]):
+            return e["d"]
+    except (ValueError, AttributeError, OSError):
+        pass
+    return device_name()
+
+
+def conflict_sub(cid):
+    m = CONFLICT_RE.match(cid)
+    return m.group(1) if m else cid
+
+
+def conflict_pictures(info, cid):
+    """[(conflict id, local path)] of the pictures that lost the conflict together with
+    this save (game.state -> game.state.png with the same device and time)."""
+    tag = cid[len(info["sub"]) + 1:]
+    folder, name = (info["sub"].rsplit("/", 1) + [""])[:2] if "/" in info["sub"] else ("", info["sub"])
+    rc, out = rclone(["lsjson", "--files-only", "--no-mimetype", CONFLICTS + ("/" + folder if folder else "")], check=False)
+    try:
+        names = {i["Path"] for i in json.loads(out or "[]")} if rc == 0 else set()
+    except (ValueError, KeyError, TypeError):
+        names = set()
+    found = []
+    for ext in QUIET_EXT:
+        pic = "%s%s.%s" % (name, ext, tag)
+        if pic in names:
+            found.append(((folder + "/" if folder else "") + pic, info["local"] + ext))
+    return found
+
+
+def restore_conflict(cid):
+    """The conflict copy becomes the save on this device again; the save it replaces goes to
+    the conflicts (it can be restored the same way). The next sync sends it everywhere."""
+    info = conflict_info(cid)
+    if not info:
+        print("bad id")
+        return 2
+    lock = open(ENGINE_LOCK, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("busy")
+        return 3
+    now = int(time.time())
+    stamp = (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") if now > SANE_TIME
+             else "time-unknown-%d" % random.randint(0, 99999))
+    backup_tag = None
+    if os.path.exists(info["local"]):
+        backup_tag = "%s.%s" % (version_device(info, info["local"]), stamp)
+    items = [(cid, info["local"])] + conflict_pictures(info, cid)
+    for n, (item, target) in enumerate(items):
+        folder = os.path.dirname(target)
+        os.makedirs(folder, exist_ok=True)
+        tmp = os.path.join(folder, ".ss_tmp_restore_" + os.path.basename(target))
+        try:
+            if rclone(["copyto", CONFLICTS + "/" + item, tmp], check=(n == 0))[0] != 0:
+                continue                # a picture that could not be fetched: the save matters
+            backup = None
+            if backup_tag and os.path.exists(target):
+                # the version here now goes to the conflicts with the same device and time
+                # as its save, so it can be restored the same way
+                backup = "%s.%s" % (conflict_sub(item), backup_tag)
+                if backup != item:
+                    rclone(["copyto", target, CONFLICTS + "/" + backup])
+            os.replace(tmp, target)
+            os.utime(target, None)      # newer than any other version: the next sync keeps it
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        if backup != item:
+            rclone(["deletefile", CONFLICTS + "/" + item], check=False)
+    log(t("restored", file=info["file"], dev=info["dev"], time=info["time"]))
+    print("ok")
+    return 0
+
+
+def drop_conflict(cid):
+    info = conflict_info(cid)
+    if not info:
+        print("bad id")
+        return 2
+    pictures = conflict_pictures(info, cid)
+    rclone(["deletefile", CONFLICTS + "/" + cid])
+    for item, _local in pictures:
+        rclone(["deletefile", CONFLICTS + "/" + item], check=False)
+    log(t("conflict_dropped", file=info["file"], dev=info["dev"], time=info["time"]))
+    print("ok")
+    return 0
+
+
 def timing_line(total):
     parts = ["%s %dx %.1f с" % (k, v[0], v[1]) for k, v in TIMES.items() if k != "scan"]
     scan = TIMES.get("scan", [0, 0.0])[1]
     return "Время: всего %.1f с; rclone: %s; скан устройства %.1f с" % (total, ", ".join(parts) or "-", scan)
 
 
+def human_size(n):
+    """Bytes in the same short form as rclone about: 9.996 GiB."""
+    units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
+    v, i = float(n), 0
+    while v >= 1024 and i < len(units) - 1:
+        v /= 1024
+        i += 1
+    if i == 0:
+        return "%d B" % n
+    return "%s %s" % (("%.3f" % v).rstrip("0").rstrip("."), units[i])
+
+
+def cloud_about():
+    """Volume of the cloud: {total, used, free} in bytes (keys missing when unknown) or None."""
+    vals = {}
+    try:
+        rc, out = rclone(["about", "--json", REMOTE.split(":", 1)[0] + ":"], check=False, timeout=60)
+        if rc == 0:
+            data = json.loads(out)
+            vals = {k: int(data[k]) for k in ("total", "used", "free") if data.get(k) is not None}
+    except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError):
+        vals = {}
+    return vals or None
+
+
 def main(argv):
     global VERBOSE, WEB
+    if argv and argv[0] == "about":
+        vals = cloud_about() or {}
+        if "--json" in argv:
+            print(json.dumps(vals))
+        else:
+            for key, label in (("total", "Total"), ("used", "Used"), ("free", "Free")):
+                if key in vals:
+                    print("%s: %s" % (label, human_size(vals[key])))
+        return 0 if vals else 1
+    if argv and argv[0] in ("conflicts", "restore", "drop"):
+        # conflict copies, for the web interface: list (JSON), restore one, delete one
+        try:
+            if argv[0] == "conflicts":
+                print(json.dumps(list_conflicts(), ensure_ascii=False))
+                return 0
+            if len(argv) < 2:
+                return 2
+            return restore_conflict(argv[1]) if argv[0] == "restore" else drop_conflict(argv[1])
+        except (SyncError, OSError, subprocess.SubprocessError) as e:
+            sys.stderr.write("%s\n" % e)
+            return 1
+    if argv and argv[0] == "check":
+        try:
+            return 0 if unchanged_here() else 1
+        except Exception:
+            return 1
     if not argv or argv[0] != "sync":
         print(__doc__ or "usage: sync_engine.py sync")
         return 2
     VERBOSE = "--verbose" in argv
     WEB = "--web-progress" in argv
+    if WEB:
+        try:
+            os.remove(STAGE_FILE)
+        except OSError:
+            pass
+        stage("scan")
     try:
         lock = open(ENGINE_LOCK, "w")
         fcntl.flock(lock, fcntl.LOCK_EX)     # a boot download and a game-exit upload never overlap
-        t_start = time.time()
-        rc_run = run()
+        t_start = time.monotonic()
+        rc_run = run_mirror() if "--mirror" in argv else run(fast="--fast" in argv)
         if TIMING:
-            log(timing_line(time.time() - t_start))
+            log(timing_line(time.monotonic() - t_start))
         return rc_run
     except SyncError as e:
         sys.stderr.write("%s\n" % e)
+        if FLAGS["full"] and os.environ.get("SS_RESULT"):
+            try:
+                with open(os.environ["SS_RESULT"], "w") as rf:
+                    rf.write("cloud_full")
+            except OSError:
+                pass
         return 1
     except (OSError, subprocess.SubprocessError) as e:
         if isinstance(e, OSError) and e.errno == errno.ENOSPC:
@@ -1537,13 +2518,25 @@ ENGINE_SCRIPT="$ENGINE_SCRIPT"
 # Само-восстановление, если раздел с rclone смонтирован noexec
 # (например, /recalbox/share на Recalbox)
 RCLONE_PATH="\$RCLONE_BIN"
-if ! "\$RCLONE_PATH" version >/dev/null 2>&1; then
-    mkdir -p /tmp/save_sync_bin 2>/dev/null
-    cp -f "\$RCLONE_BIN" /tmp/save_sync_bin/rclone 2>/dev/null
-    chmod +x /tmp/save_sync_bin/rclone 2>/dev/null
-    if /tmp/save_sync_bin/rclone version >/dev/null 2>&1; then
-        RCLONE_PATH="/tmp/save_sync_bin/rclone"
+# Результат проверки запоминается до перезагрузки, пока сам rclone не обновлён.
+RC_CACHE=/tmp/save_sync_rclone_path
+RC_STAMP="\$(stat -c %Y "\$RCLONE_BIN" 2>/dev/null)"
+if [ -n "\$RC_STAMP" ] && [ -f "\$RC_CACHE" ] && [ "\$(sed -n 2p "\$RC_CACHE")" = "\$RC_STAMP" ] && [ "\$(sed -n 3p "\$RC_CACHE")" = "\$RCLONE_BIN" ] && [ -x "\$(sed -n 1p "\$RC_CACHE")" ]; then
+    RCLONE_PATH="\$(sed -n 1p "\$RC_CACHE")"
+else
+    RC_OK=0
+    if "\$RCLONE_PATH" version >/dev/null 2>&1; then
+        RC_OK=1
+    else
+        mkdir -p /tmp/save_sync_bin 2>/dev/null
+        cp -f "\$RCLONE_BIN" /tmp/save_sync_bin/rclone 2>/dev/null
+        chmod +x /tmp/save_sync_bin/rclone 2>/dev/null
+        if /tmp/save_sync_bin/rclone version >/dev/null 2>&1; then
+            RCLONE_PATH="/tmp/save_sync_bin/rclone"
+            RC_OK=1
+        fi
     fi
+    [ \$RC_OK -eq 1 ] && [ -n "\$RC_STAMP" ] && printf '%s\n%s\n%s\n' "\$RCLONE_PATH" "\$RC_STAMP" "\$RCLONE_BIN" > "\$RC_CACHE" 2>/dev/null
 fi
 CONFIG_FILE="$CONFIG_FILE"
 LOG_FILE="$LOG_FILE"
@@ -1557,8 +2550,14 @@ if [ -f "\$CONFIG_FILE" ]; then
     . "\$CONFIG_FILE"
 fi
 
+# лог не больше MAX_LOG_SIZE: при превышении старая часть уходит в .old
+if [ -f "\$LOG_FILE" ] && [ "\$(wc -c < "\$LOG_FILE" 2>/dev/null || echo 0)" -gt "\${MAX_LOG_SIZE:-102400}" ] 2>/dev/null; then
+    mv -f "\$LOG_FILE" "\$LOG_FILE.old" 2>/dev/null
+fi
+
 # LOG_LEVEL="debug" in the config: write how long each stage of the sync took
-T0=\$(date +%s)
+# uptime, not the clock: at boot the clock can jump by years when it is set over the network
+T0=\$(cut -d. -f1 /proc/uptime 2>/dev/null || date +%s)
 [ "\$LOG_LEVEL" = "debug" ] && export SS_TIMING=1
 
 # on-screen message (EmulationStation on Batocera / KNULLI); silent if unavailable
@@ -1725,7 +2724,7 @@ fi
 # только изменённое в облаке, отправляется только изменённое здесь. Если
 # сохранение изменили на разных устройствах, остаётся более новое, а старое
 # копируется в папку _conflicts (срок - настройка «Копии при конфликтах»). Ничего не спрашивается.
-T_ENG=\$(date +%s)
+T_ENG=\$(cut -d. -f1 /proc/uptime 2>/dev/null || date +%s)
 progress_start "download" "Загрузка сохранений"
 ENGINE_ARGS=(sync)
 [ "\$WEB_PROGRESS" = "true" ] && ENGINE_ARGS+=(--web-progress)
@@ -1739,8 +2738,12 @@ fi
 ENGINE_EXIT=\$?
 if [ \$ENGINE_EXIT -eq 0 ]; then
     # the marker is still needed by devices on older versions
-    "\$RCLONE_PATH" --config "\$RCLONE_CONF" lsf "\$FIRST_SYNC_MARKER" 2>/dev/null | grep -q . || \
-        echo "first_sync_\$(date +%s)" | "\$RCLONE_PATH" --config "\$RCLONE_CONF" rcat "\$FIRST_SYNC_MARKER" 2>/dev/null
+    if [ "\$(state_get MARKER_DONE)" != "\$FIRST_SYNC_MARKER" ]; then
+        if "\$RCLONE_PATH" --config "\$RCLONE_CONF" lsf "\$FIRST_SYNC_MARKER" 2>/dev/null | grep -q . || \
+            echo "first_sync_\$(date +%s)" | "\$RCLONE_PATH" --config "\$RCLONE_CONF" rcat "\$FIRST_SYNC_MARKER" 2>/dev/null; then
+            state_set MARKER_DONE "\$FIRST_SYNC_MARKER"
+        fi
+    fi
     date +%s > "\$READY_FILE"
     date +%s > "\$LAST_SYNC_TIME"
     save_status "OK"
@@ -1748,14 +2751,25 @@ if [ \$ENGINE_EXIT -eq 0 ]; then
     state_set LAST_GOOD_SYNC "\$(date +%s)"
     [ "\$LOG_LEVEL" = "debug" ] && echo "\$(date '+%d.%m %H:%M:%S') Время: до запуска синхронизации \$((T_ENG - T0)) с" >> "\$LOG_FILE" 2>/dev/null
     SYNC_NOTE=\$(cat "/tmp/save_sync_result.\$\$" 2>/dev/null); rm -f "/tmp/save_sync_result.\$\$"
-    echo "\$(date '+%d.%m %H:%M:%S') Сохранения загружены\${SYNC_NOTE:+ (\$SYNC_NOTE)}" >> "\$LOG_FILE" 2>/dev/null
-    [ -n "\$SYNC_NOTE" ] && [ "\$SYNC_NOTE" != "изменений нет" ] && notify_screen "Save Sync: \$SYNC_NOTE"
+    if [ "\$FORCE_SYNC" = "true" ]; then SYNC_WHAT="Синхронизация вручную"; else SYNC_WHAT="Синхронизация"; fi
+    echo "\$(date '+%d.%m %H:%M:%S') \$SYNC_WHAT\${SYNC_NOTE:+ (\$SYNC_NOTE)}" >> "\$LOG_FILE" 2>/dev/null
+    if [ -n "\$SYNC_NOTE" ] && [ "\$SYNC_NOTE" != "нет изменений" ]; then
+        case "\$SYNC_NOTE" in
+            *конфликт*) [ "\${CONFLICT_KEEP_DAYS:-3}" != "0" ] && notify_screen "Save Sync: конфликт сохранений - подробнее в веб-интерфейсе" || notify_screen "Save Sync: \$SYNC_NOTE" ;;
+            *) notify_screen "Save Sync: \$SYNC_NOTE" ;;
+        esac
+    fi
     progress_finish true "download" "Загрузка сохранений завершена"
     exit 0
 fi
 save_status "ERROR"
 echo "\$(date '+%d.%m %H:%M:%S') Ошибка загрузки сохранений (код: \$ENGINE_EXIT)" >> "\$LOG_FILE" 2>/dev/null
-notify_screen "Save Sync: ошибка синхронизации"
+if grep -q "^cloud_full" "/tmp/save_sync_result.\$\$" 2>/dev/null; then
+    notify_screen "Save Sync: ошибка - в облаке закончилось место"
+else
+    notify_screen "Save Sync: ошибка синхронизации"
+fi
+rm -f "/tmp/save_sync_result.\$\$"
 progress_finish false "download" "Ошибка загрузки сохранений"
 exit 1
 ENDOFSCRIPT
@@ -1784,13 +2798,25 @@ ENGINE_SCRIPT="$ENGINE_SCRIPT"
 # Само-восстановление, если раздел с rclone смонтирован noexec
 # (например, /recalbox/share на Recalbox)
 RCLONE_PATH="\$RCLONE_BIN"
-if ! "\$RCLONE_PATH" version >/dev/null 2>&1; then
-    mkdir -p /tmp/save_sync_bin 2>/dev/null
-    cp -f "\$RCLONE_BIN" /tmp/save_sync_bin/rclone 2>/dev/null
-    chmod +x /tmp/save_sync_bin/rclone 2>/dev/null
-    if /tmp/save_sync_bin/rclone version >/dev/null 2>&1; then
-        RCLONE_PATH="/tmp/save_sync_bin/rclone"
+# Результат проверки запоминается до перезагрузки, пока сам rclone не обновлён.
+RC_CACHE=/tmp/save_sync_rclone_path
+RC_STAMP="\$(stat -c %Y "\$RCLONE_BIN" 2>/dev/null)"
+if [ -n "\$RC_STAMP" ] && [ -f "\$RC_CACHE" ] && [ "\$(sed -n 2p "\$RC_CACHE")" = "\$RC_STAMP" ] && [ "\$(sed -n 3p "\$RC_CACHE")" = "\$RCLONE_BIN" ] && [ -x "\$(sed -n 1p "\$RC_CACHE")" ]; then
+    RCLONE_PATH="\$(sed -n 1p "\$RC_CACHE")"
+else
+    RC_OK=0
+    if "\$RCLONE_PATH" version >/dev/null 2>&1; then
+        RC_OK=1
+    else
+        mkdir -p /tmp/save_sync_bin 2>/dev/null
+        cp -f "\$RCLONE_BIN" /tmp/save_sync_bin/rclone 2>/dev/null
+        chmod +x /tmp/save_sync_bin/rclone 2>/dev/null
+        if /tmp/save_sync_bin/rclone version >/dev/null 2>&1; then
+            RCLONE_PATH="/tmp/save_sync_bin/rclone"
+            RC_OK=1
+        fi
     fi
+    [ \$RC_OK -eq 1 ] && [ -n "\$RC_STAMP" ] && printf '%s\n%s\n%s\n' "\$RCLONE_PATH" "\$RC_STAMP" "\$RCLONE_BIN" > "\$RC_CACHE" 2>/dev/null
 fi
 CONFIG_FILE="$CONFIG_FILE"
 LOG_FILE="$LOG_FILE"
@@ -1804,8 +2830,14 @@ if [ -f "\$CONFIG_FILE" ]; then
     . "\$CONFIG_FILE"
 fi
 
+# лог не больше MAX_LOG_SIZE: при превышении старая часть уходит в .old
+if [ -f "\$LOG_FILE" ] && [ "\$(wc -c < "\$LOG_FILE" 2>/dev/null || echo 0)" -gt "\${MAX_LOG_SIZE:-102400}" ] 2>/dev/null; then
+    mv -f "\$LOG_FILE" "\$LOG_FILE.old" 2>/dev/null
+fi
+
 # LOG_LEVEL="debug" in the config: write how long each stage of the sync took
-T0=\$(date +%s)
+# uptime, not the clock: at boot the clock can jump by years when it is set over the network
+T0=\$(cut -d. -f1 /proc/uptime 2>/dev/null || date +%s)
 [ "\$LOG_LEVEL" = "debug" ] && export SS_TIMING=1
 
 # on-screen message (EmulationStation on Batocera / KNULLI); silent if unavailable
@@ -1925,6 +2957,33 @@ if [ -n "\$ENGINE_ERR" ]; then
 fi
 
 
+# Синхронизация после игры (настройка «Синхронизация после игры», SYNC_MODE):
+#   economy - только при изменениях: сохранения на устройстве не менялись - облако не трогается,
+#             менялись - быстрая синхронизация
+#   fast    - после каждой игры: чужие изменения и удаления берутся из манифестов, облако
+#             спрашивается только про эти файлы и изменённые здесь
+#   full    - полная: весь список файлов в облаке, как в прошлых версиях
+# При включении, из меню, веб-интерфейса, с --force и после неудачной выгрузки
+# (PENDING_UPLOAD) синхронизация всегда полная. Старая настройка SKIP_UNCHANGED:
+# включена = только при изменениях (economy), выключена = полная.
+case "\$SYNC_MODE" in
+    full|fast|economy) ;;
+    *) if [ "\$SKIP_UNCHANGED" = "false" ]; then SYNC_MODE=full; else SYNC_MODE=economy; fi ;;
+esac
+LOCAL_CHANGED=""
+FAST_SYNC=""
+if [ "\$SYNC_MODE" != "full" ] && [ "\$FORCE_SYNC" != "true" ] && [ -z "\$SHOW_PROGRESS" ] && [ -z "\$(state_get PENDING_UPLOAD)" ]; then
+    FAST_SYNC=1
+fi
+if [ -n "\$FAST_SYNC" ] && [ "\$SYNC_MODE" = "economy" ]; then
+    if SS_EXCLUDED="\$EXCLUDED_SYSTEMS" python3 "\$ENGINE_SCRIPT" check >/dev/null 2>&1; then
+        echo "\$(date '+%d.%m %H:%M:%S') Синхронизация (нет изменений) - облако не запрашивалось" >> "\$LOG_FILE" 2>/dev/null
+        exit 0
+    else
+        LOCAL_CHANGED=1
+    fi
+fi
+
 # Проверка интервала (ТОЛЬКО если НЕ принудительная синхронизация)
 if [ "\$FORCE_SYNC" != "true" ] && [ -z "\$SHOW_PROGRESS" ] && [ \$SYNC_INTERVAL -gt 0 ] && [ -f "\$LAST_SYNC_TIME" ]; then
     LAST=\$(cat "\$LAST_SYNC_TIME" 2>/dev/null || echo 0)
@@ -1934,6 +2993,23 @@ if [ "\$FORCE_SYNC" != "true" ] && [ -z "\$SHOW_PROGRESS" ] && [ \$SYNC_INTERVAL
         # Это не ошибка, но изменения пока есть только на устройстве
         state_set PENDING_UPLOAD 1
         exit 0
+    fi
+fi
+
+# Автоматическая выгрузка после игры: показываем, что она началась, а если она затянулась -
+# раз в минуту напоминаем, что процесс идёт. Не показывается, если менять нечего.
+if [ "\$FORCE_SYNC" != "true" ] && [ -z "\$SHOW_PROGRESS" ] && [ "\$WEB_PROGRESS" != "true" ]; then
+    if [ -n "\$(state_get PENDING_UPLOAD)" ] || [ "\$LOCAL_CHANGED" = "1" ] || \
+       { [ -z "\$LOCAL_CHANGED" ] && ! SS_EXCLUDED="\$EXCLUDED_SYSTEMS" python3 "\$ENGINE_SCRIPT" check >/dev/null 2>&1; }; then
+        notify_screen "Save Sync: синхронизация началась"
+        (
+            P=\$\$; n=0
+            while sleep 60; do
+                kill -0 "\$P" 2>/dev/null || break
+                n=\$((n+1))
+                notify_screen "Save Sync: синхронизация ещё идёт (\$n мин)"
+            done
+        ) 200>&- >/dev/null 2>&1 &
     fi
 fi
 
@@ -1950,12 +3026,12 @@ while [ "\$(date +%Y)" -lt 2024 ]; do
     sleep 3
 done
 
-# Ждём облако. Сразу после включения сеть может ещё подниматься,
-# поэтому пробуем около 2 минут. Проверяется само облако, а не ping
+# Ждём облако около 30 секунд: после игры сеть обычно уже есть, а если её
+# нет, сохранения уйдут позже (PENDING_UPLOAD). Проверяется само облако, а не ping
 # до 1.1.1.1: в некоторых сетях ping закрыт, хотя облако работает.
 # Срок считаем по uptime - обычные часы могут прыгнуть при синхронизации NTP.
 uptime_sec() { cut -d. -f1 /proc/uptime; }
-WAIT_UNTIL=\$(( \$(uptime_sec) + 120 ))
+WAIT_UNTIL=\$(( \$(uptime_sec) + 30 ))
 CLOUD_OK=0
 while :; do
     if "\$RCLONE_PATH" --config "\$RCLONE_CONF" lsd "\$REMOTE_NAME:" \
@@ -1968,30 +3044,10 @@ while :; do
 done
 if [ \$CLOUD_OK -eq 0 ]; then
     echo "\$(date '+%d.%m %H:%M:%S') Облако недоступно (нет сети или облако не отвечает)" >> "\$LOG_FILE" 2>/dev/null
+    notify_screen "Save Sync: нет связи с облаком, сохранения отправятся позже"
     save_status "ERROR"
     state_set PENDING_UPLOAD 1
     exit 1
-fi
-
-# Проверка свободного места в облаке
-if [ -z "\$SHOW_PROGRESS" ]; then
-    FILES_SIZE=\$(find "\$SAVE_DIR" -type f ! -name ".DS_Store" ! -name "Thumbs.db" ! -name "*.log" ! -name "*.cache" ! -name ".keep" ! -name "*.keep" -printf '%s\n' 2>/dev/null | awk '{sum+=\$1} END {print sum+0}')
-    FILES_SIZE=\${FILES_SIZE:-0}
-    FILES_SIZE_MB=\$((FILES_SIZE / 1024 / 1024))
-    
-    CLOUD_FREE=\$("\$RCLONE_PATH" --config "\$RCLONE_CONF" about "\$REMOTE_NAME:" 2>/dev/null | grep -i "free" | awk '{print \$2}' | sed 's/[^0-9]//g')
-    CLOUD_FREE=\${CLOUD_FREE:-0}
-    CLOUD_FREE_MB=\$((CLOUD_FREE / 1024 / 1024))
-    
-    if [ "\$FILES_SIZE_MB" -gt 0 ] && [ "\$CLOUD_FREE_MB" -gt 0 ]; then
-        NEEDED_MB=\$((FILES_SIZE_MB + FILES_SIZE_MB / 10))
-        if [ "\$CLOUD_FREE_MB" -lt "\$NEEDED_MB" ]; then
-            echo "\$(date '+%d.%m %H:%M:%S') ⚠️ Недостаточно места в облаке! Нужно ~\${NEEDED_MB} МБ, свободно \${CLOUD_FREE_MB} МБ" >> "\$LOG_FILE" 2>/dev/null
-            save_status "ERROR"
-            state_set PENDING_UPLOAD 1
-            exit 1
-        fi
-    fi
 fi
 
 # ======== ДВУСТОРОННЯЯ СИНХРОНИЗАЦИЯ (sync_engine.py) ========
@@ -1999,10 +3055,11 @@ fi
 # только изменённое в облаке, отправляется только изменённое здесь. Если
 # сохранение изменили на разных устройствах, остаётся более новое, а старое
 # копируется в папку _conflicts (срок - настройка «Копии при конфликтах»). Ничего не спрашивается.
-T_ENG=\$(date +%s)
+T_ENG=\$(cut -d. -f1 /proc/uptime 2>/dev/null || date +%s)
 progress_start "upload" "Выгрузка сохранений"
 ENGINE_ARGS=(sync)
 [ "\$WEB_PROGRESS" = "true" ] && ENGINE_ARGS+=(--web-progress)
+[ -n "\$FAST_SYNC" ] && ENGINE_ARGS+=(--fast)
 if [ -n "\$SHOW_PROGRESS" ]; then
     SS_RCLONE="\$RCLONE_PATH" SS_EXCLUDED="\$EXCLUDED_SYSTEMS" SS_RETRIES="\$MAX_RETRIES" SS_KEEP_DAYS="\${CONFLICT_KEEP_DAYS:-3}" SS_RESULT="/tmp/save_sync_result.\$\$" \
         python3 "\$ENGINE_SCRIPT" "\${ENGINE_ARGS[@]}" --verbose
@@ -2013,8 +3070,12 @@ fi
 ENGINE_EXIT=\$?
 if [ \$ENGINE_EXIT -eq 0 ]; then
     # the marker is still needed by devices on older versions
-    "\$RCLONE_PATH" --config "\$RCLONE_CONF" lsf "\$FIRST_SYNC_MARKER" 2>/dev/null | grep -q . || \
-        echo "first_sync_\$(date +%s)" | "\$RCLONE_PATH" --config "\$RCLONE_CONF" rcat "\$FIRST_SYNC_MARKER" 2>/dev/null
+    if [ "\$(state_get MARKER_DONE)" != "\$FIRST_SYNC_MARKER" ]; then
+        if "\$RCLONE_PATH" --config "\$RCLONE_CONF" lsf "\$FIRST_SYNC_MARKER" 2>/dev/null | grep -q . || \
+            echo "first_sync_\$(date +%s)" | "\$RCLONE_PATH" --config "\$RCLONE_CONF" rcat "\$FIRST_SYNC_MARKER" 2>/dev/null; then
+            state_set MARKER_DONE "\$FIRST_SYNC_MARKER"
+        fi
+    fi
     date +%s > "\$READY_FILE"
     date +%s > "\$LAST_SYNC_TIME"
     save_status "OK"
@@ -2022,14 +3083,25 @@ if [ \$ENGINE_EXIT -eq 0 ]; then
     state_set LAST_GOOD_SYNC "\$(date +%s)"
     [ "\$LOG_LEVEL" = "debug" ] && echo "\$(date '+%d.%m %H:%M:%S') Время: до запуска синхронизации \$((T_ENG - T0)) с" >> "\$LOG_FILE" 2>/dev/null
     SYNC_NOTE=\$(cat "/tmp/save_sync_result.\$\$" 2>/dev/null); rm -f "/tmp/save_sync_result.\$\$"
-    echo "\$(date '+%d.%m %H:%M:%S') Выгрузка сохранений\${SYNC_NOTE:+ (\$SYNC_NOTE)}" >> "\$LOG_FILE" 2>/dev/null
-    [ -n "\$SYNC_NOTE" ] && [ "\$SYNC_NOTE" != "изменений нет" ] && notify_screen "Save Sync: \$SYNC_NOTE"
+    if [ "\$FORCE_SYNC" = "true" ]; then SYNC_WHAT="Синхронизация вручную"; else SYNC_WHAT="Синхронизация"; fi
+    echo "\$(date '+%d.%m %H:%M:%S') \$SYNC_WHAT\${SYNC_NOTE:+ (\$SYNC_NOTE)}" >> "\$LOG_FILE" 2>/dev/null
+    if [ -n "\$SYNC_NOTE" ] && [ "\$SYNC_NOTE" != "нет изменений" ]; then
+        case "\$SYNC_NOTE" in
+            *конфликт*) [ "\${CONFLICT_KEEP_DAYS:-3}" != "0" ] && notify_screen "Save Sync: конфликт сохранений - подробнее в веб-интерфейсе" || notify_screen "Save Sync: \$SYNC_NOTE" ;;
+            *) notify_screen "Save Sync: \$SYNC_NOTE" ;;
+        esac
+    fi
     progress_finish true "upload" "Выгрузка сохранений завершена"
     exit 0
 fi
 save_status "ERROR"
 echo "\$(date '+%d.%m %H:%M:%S') Ошибка выгрузки сохранений (код: \$ENGINE_EXIT)" >> "\$LOG_FILE" 2>/dev/null
-notify_screen "Save Sync: ошибка синхронизации"
+if grep -q "^cloud_full" "/tmp/save_sync_result.\$\$" 2>/dev/null; then
+    notify_screen "Save Sync: ошибка - в облаке закончилось место"
+else
+    notify_screen "Save Sync: ошибка синхронизации"
+fi
+rm -f "/tmp/save_sync_result.\$\$"
 state_set PENDING_UPLOAD 1
 progress_finish false "upload" "Ошибка выгрузки сохранений"
 exit 1
@@ -2066,6 +3138,7 @@ bash "$UPLOAD_SCRIPT" --detach &
 ENDOFSCRIPT
         chmod +x "$USERSCRIPTS_DIR/save-sync[endgame].sh" 2>/dev/null
     else
+        mkdir -p "$SCRIPT_DIR" 2>/dev/null
         cat > "$SCRIPT_DIR/save-sync.sh" << ENDOFSCRIPT
 #!/bin/bash
 
@@ -2104,13 +3177,25 @@ RCLONE_BIN="$RCLONE_BIN"
 # Само-восстановление, если раздел с rclone смонтирован noexec
 # (например, /recalbox/share на Recalbox)
 RCLONE_PATH="\$RCLONE_BIN"
-if ! "\$RCLONE_PATH" version >/dev/null 2>&1; then
-    mkdir -p /tmp/save_sync_bin 2>/dev/null
-    cp -f "\$RCLONE_BIN" /tmp/save_sync_bin/rclone 2>/dev/null
-    chmod +x /tmp/save_sync_bin/rclone 2>/dev/null
-    if /tmp/save_sync_bin/rclone version >/dev/null 2>&1; then
-        RCLONE_PATH="/tmp/save_sync_bin/rclone"
+# Результат проверки запоминается до перезагрузки, пока сам rclone не обновлён.
+RC_CACHE=/tmp/save_sync_rclone_path
+RC_STAMP="\$(stat -c %Y "\$RCLONE_BIN" 2>/dev/null)"
+if [ -n "\$RC_STAMP" ] && [ -f "\$RC_CACHE" ] && [ "\$(sed -n 2p "\$RC_CACHE")" = "\$RC_STAMP" ] && [ "\$(sed -n 3p "\$RC_CACHE")" = "\$RCLONE_BIN" ] && [ -x "\$(sed -n 1p "\$RC_CACHE")" ]; then
+    RCLONE_PATH="\$(sed -n 1p "\$RC_CACHE")"
+else
+    RC_OK=0
+    if "\$RCLONE_PATH" version >/dev/null 2>&1; then
+        RC_OK=1
+    else
+        mkdir -p /tmp/save_sync_bin 2>/dev/null
+        cp -f "\$RCLONE_BIN" /tmp/save_sync_bin/rclone 2>/dev/null
+        chmod +x /tmp/save_sync_bin/rclone 2>/dev/null
+        if /tmp/save_sync_bin/rclone version >/dev/null 2>&1; then
+            RCLONE_PATH="/tmp/save_sync_bin/rclone"
+            RC_OK=1
+        fi
     fi
+    [ \$RC_OK -eq 1 ] && [ -n "\$RC_STAMP" ] && printf '%s\n%s\n%s\n' "\$RCLONE_PATH" "\$RC_STAMP" "\$RCLONE_BIN" > "\$RC_CACHE" 2>/dev/null
 fi
 RCLONE_CONF="$RCLONE_CONF"
 ROMS_DIR="$ROMS_DIR"
@@ -2120,6 +3205,14 @@ LOG_FILE="$LOG_FILE"
 PROGRESS_FILE="/tmp/save_sync_progress.json"
 PROGRESS_LOG="/tmp/save_sync_progress.log"
 WEB_PROGRESS=false
+CONFIG_FILE="$CONFIG_FILE"
+
+# on-screen message (EmulationStation on Batocera / KNULLI); silent if unavailable
+notify_screen() {
+    [ -f "\$CONFIG_FILE" ] && grep -q '^NOTIFICATIONS="false"' "\$CONFIG_FILE" && return 0
+    command -v curl >/dev/null 2>&1 || return 0
+    curl -s -m 3 -X POST -H "Content-Type: text/plain; charset=utf-8" --data-binary "\$1" http://127.0.0.1:1234/notify >/dev/null 2>&1 || true
+}
 
 if [ "\$1" = "--web-progress" ]; then
     WEB_PROGRESS=true
@@ -2166,6 +3259,11 @@ run_transfer() {
 log_msg() {
     echo "\$(date '+%d.%m %H:%M:%S') \$1" >> "\$LOG_FILE"
 }
+
+# лог не больше MAX_LOG_SIZE: при превышении старая часть уходит в .old
+if [ -f "\$LOG_FILE" ] && [ "\$(wc -c < "\$LOG_FILE" 2>/dev/null || echo 0)" -gt "\${MAX_LOG_SIZE:-102400}" ] 2>/dev/null; then
+    mv -f "\$LOG_FILE" "\$LOG_FILE.old" 2>/dev/null
+fi
 
 log_msg "Начало загрузки ромов"
 
@@ -2188,6 +3286,16 @@ trap on_cancel TERM INT
 
 echo "🔄 Загрузка ромов из облака..."
 
+notify_screen "Save Sync: загрузка ромов началась"
+(
+    P=\$\$; n=0
+    while sleep 60; do
+        kill -0 "\$P" 2>/dev/null || break
+        n=\$((n+1))
+        notify_screen "Save Sync: загрузка ромов ещё идёт (\$n мин)"
+    done
+) 200>&- >/dev/null 2>&1 &
+
 progress_start "roms_download" "Загрузка ромов"
 run_transfer copy "\$REMOTE_ROMS" "\$ROMS_DIR" \
     --update \
@@ -2199,10 +3307,17 @@ if [ \$EXIT_CODE -eq 0 ] || [ \$EXIT_CODE -eq 3 ]; then
     echo "✅ Загрузка ромов завершена"
     log_msg "Загрузка ромов завершена"
     progress_finish true "roms_download" "Загрузка ромов завершена"
+    notify_screen "Save Sync: ромы загружены"
+    # новые игры сразу появляются в списке EmulationStation (Batocera, KNULLI),
+    # если ES ничем не занят: не идёт игра, скрапер или обновление
+    if curl -s -m 3 http://127.0.0.1:1234/isIdle 2>/dev/null | grep -q true; then
+        curl -s -m 5 http://127.0.0.1:1234/reloadgames >/dev/null 2>&1 || true
+    fi
 else
     echo "❌ Ошибка загрузки ромов (код: \$EXIT_CODE)"
     log_msg "Ошибка загрузки ромов (код: \$EXIT_CODE)"
     progress_finish false "roms_download" "Ошибка загрузки ромов"
+    notify_screen "Save Sync: ошибка загрузки ромов"
 fi
 
 log_msg "Конец загрузки ромов"
@@ -2220,13 +3335,25 @@ RCLONE_BIN="$RCLONE_BIN"
 # Само-восстановление, если раздел с rclone смонтирован noexec
 # (например, /recalbox/share на Recalbox)
 RCLONE_PATH="\$RCLONE_BIN"
-if ! "\$RCLONE_PATH" version >/dev/null 2>&1; then
-    mkdir -p /tmp/save_sync_bin 2>/dev/null
-    cp -f "\$RCLONE_BIN" /tmp/save_sync_bin/rclone 2>/dev/null
-    chmod +x /tmp/save_sync_bin/rclone 2>/dev/null
-    if /tmp/save_sync_bin/rclone version >/dev/null 2>&1; then
-        RCLONE_PATH="/tmp/save_sync_bin/rclone"
+# Результат проверки запоминается до перезагрузки, пока сам rclone не обновлён.
+RC_CACHE=/tmp/save_sync_rclone_path
+RC_STAMP="\$(stat -c %Y "\$RCLONE_BIN" 2>/dev/null)"
+if [ -n "\$RC_STAMP" ] && [ -f "\$RC_CACHE" ] && [ "\$(sed -n 2p "\$RC_CACHE")" = "\$RC_STAMP" ] && [ "\$(sed -n 3p "\$RC_CACHE")" = "\$RCLONE_BIN" ] && [ -x "\$(sed -n 1p "\$RC_CACHE")" ]; then
+    RCLONE_PATH="\$(sed -n 1p "\$RC_CACHE")"
+else
+    RC_OK=0
+    if "\$RCLONE_PATH" version >/dev/null 2>&1; then
+        RC_OK=1
+    else
+        mkdir -p /tmp/save_sync_bin 2>/dev/null
+        cp -f "\$RCLONE_BIN" /tmp/save_sync_bin/rclone 2>/dev/null
+        chmod +x /tmp/save_sync_bin/rclone 2>/dev/null
+        if /tmp/save_sync_bin/rclone version >/dev/null 2>&1; then
+            RCLONE_PATH="/tmp/save_sync_bin/rclone"
+            RC_OK=1
+        fi
     fi
+    [ \$RC_OK -eq 1 ] && [ -n "\$RC_STAMP" ] && printf '%s\n%s\n%s\n' "\$RCLONE_PATH" "\$RC_STAMP" "\$RCLONE_BIN" > "\$RC_CACHE" 2>/dev/null
 fi
 RCLONE_CONF="$RCLONE_CONF"
 ROMS_DIR="$ROMS_DIR"
@@ -2236,6 +3363,14 @@ LOG_FILE="$LOG_FILE"
 PROGRESS_FILE="/tmp/save_sync_progress.json"
 PROGRESS_LOG="/tmp/save_sync_progress.log"
 WEB_PROGRESS=false
+CONFIG_FILE="$CONFIG_FILE"
+
+# on-screen message (EmulationStation on Batocera / KNULLI); silent if unavailable
+notify_screen() {
+    [ -f "\$CONFIG_FILE" ] && grep -q '^NOTIFICATIONS="false"' "\$CONFIG_FILE" && return 0
+    command -v curl >/dev/null 2>&1 || return 0
+    curl -s -m 3 -X POST -H "Content-Type: text/plain; charset=utf-8" --data-binary "\$1" http://127.0.0.1:1234/notify >/dev/null 2>&1 || true
+}
 
 if [ "\$1" = "--web-progress" ]; then
     WEB_PROGRESS=true
@@ -2283,6 +3418,11 @@ log_msg() {
     echo "\$(date '+%d.%m %H:%M:%S') \$1" >> "\$LOG_FILE"
 }
 
+# лог не больше MAX_LOG_SIZE: при превышении старая часть уходит в .old
+if [ -f "\$LOG_FILE" ] && [ "\$(wc -c < "\$LOG_FILE" 2>/dev/null || echo 0)" -gt "\${MAX_LOG_SIZE:-102400}" ] 2>/dev/null; then
+    mv -f "\$LOG_FILE" "\$LOG_FILE.old" 2>/dev/null
+fi
+
 log_msg "Начало выгрузки ромов"
 
 # ======== ОТМЕНА (кнопка «Отмена» в веб-интерфейсе, Ctrl+C, выключение) ========
@@ -2302,26 +3442,17 @@ trap on_cancel TERM INT
 
 "\$RCLONE_PATH" --config "\$RCLONE_CONF" mkdir "\$REMOTE_ROMS" 2>/dev/null
 
-# Проверка свободного места в облаке (размер считаем через du -
-# читать содержимое файлов, как для сохранений, здесь нельзя:
-# коллекция ромов может весить сотни ГБ, и построчное чтение
-# заняло бы неоправданно много времени)
-ROMS_SIZE_MB=\$(du -sm "\$ROMS_DIR" 2>/dev/null | awk '{print \$1}')
-ROMS_SIZE_MB=\${ROMS_SIZE_MB:-0}
-
-CLOUD_FREE=\$("\$RCLONE_PATH" --config "\$RCLONE_CONF" about "\$REMOTE_NAME:" 2>/dev/null | grep -i "free" | awk '{print \$2}' | sed 's/[^0-9]//g')
-CLOUD_FREE=\${CLOUD_FREE:-0}
-CLOUD_FREE_MB=\$((CLOUD_FREE / 1024 / 1024))
-
-if [ "\$ROMS_SIZE_MB" -gt 0 ] && [ "\$CLOUD_FREE_MB" -gt 0 ]; then
-    NEEDED_MB=\$((ROMS_SIZE_MB + ROMS_SIZE_MB / 10))
-    if [ "\$CLOUD_FREE_MB" -lt "\$NEEDED_MB" ]; then
-        log_msg "⚠️ Недостаточно места в облаке для ромов! Нужно ~\${NEEDED_MB} МБ, свободно \${CLOUD_FREE_MB} МБ"
-        exit 1
-    fi
-fi
-
 echo "🔄 Копирование ромов в облако..."
+
+notify_screen "Save Sync: выгрузка ромов началась"
+(
+    P=\$\$; n=0
+    while sleep 60; do
+        kill -0 "\$P" 2>/dev/null || break
+        n=\$((n+1))
+        notify_screen "Save Sync: выгрузка ромов ещё идёт (\$n мин)"
+    done
+) 200>&- >/dev/null 2>&1 &
 
 progress_start "roms_upload" "Выгрузка ромов"
 run_transfer sync "\$ROMS_DIR" "\$REMOTE_ROMS" \
@@ -2334,10 +3465,12 @@ if [ \$EXIT_CODE -eq 0 ] || [ \$EXIT_CODE -eq 3 ]; then
     echo "✅ Выгрузка ромов завершена"
     log_msg "Выгрузка ромов завершена"
     progress_finish true "roms_upload" "Выгрузка ромов завершена"
+    notify_screen "Save Sync: ромы выгружены"
 else
     echo "❌ Ошибка выгрузки ромов (код: \$EXIT_CODE)"
     log_msg "❌ Ошибка выгрузки ромов (код: \$EXIT_CODE)"
     progress_finish false "roms_upload" "Ошибка выгрузки ромов"
+    notify_screen "Save Sync: ошибка выгрузки ромов"
 fi
 
 log_msg "Конец выгрузки ромов"
@@ -2417,6 +3550,7 @@ LOG_FILE = "__SS_LOG_FILE__"
 RCLONE_BIN = "__SS_RCLONE_BIN__"
 RCLONE_CONF = "__SS_RCLONE_CONF__"
 REMOTE_ROMS = "__SS_REMOTE_ROMS__"
+CONFIG_FILE = "__SS_CONFIG_FILE__"
 
 PROGRESS_FILE = "/tmp/save_sync_progress.json"
 LOCK_FILE = "/tmp/save_sync_link.lock"
@@ -2429,6 +3563,7 @@ ARCHIVE_DL = "https://archive.org/download"
 USER_AGENT = "SaveSync (+https://github.com/1DeX6/save-sync)"
 MIN_FREE_BYTES = 50 * 1024 * 1024   # keep this much free on the card
 RETRIES = 3
+NO_SPACE = {"hit": False}      # set when a download stopped for lack of space
 CHUNK = 256 * 1024
 TIMEOUT = 60
 
@@ -2510,6 +3645,7 @@ MSG = {
         "interrupted": "⏹  Interrupted. Run again with the same link to resume.",
         "locked": "❌ Another link download is already running.",
         "es_hint": "ℹ️  To see new games: EmulationStation menu → Update gamelists (or restart).",
+        "es_reloaded": "ℹ️  New games were added to the EmulationStation list.",
         "units": ("B", "KB", "MB", "GB", "TB"),
         "log_start": "Link download: {service} {url} -> {dest}",
         "log_done": "Link download complete: {ok} downloaded, {skip} skipped, {fail} failed",
@@ -2604,6 +3740,7 @@ MSG = {
         "interrupted": "⏹  Прервано. Запустите снова с той же ссылкой - загрузка продолжится.",
         "locked": "❌ Уже идёт другая загрузка по ссылке.",
         "es_hint": "ℹ️  Чтобы увидеть новые игры: меню EmulationStation → Обновить списки игр (или перезапуск).",
+        "es_reloaded": "ℹ️  Новые игры добавлены в список EmulationStation.",
         "units": ("Б", "КБ", "МБ", "ГБ", "ТБ"),
         "log_start": "Загрузка по ссылке: {service} {url} -> {dest}",
         "log_done": "Загрузка по ссылке завершена: скачано {ok}, пропущено {skip}, с ошибкой {fail}",
@@ -2639,6 +3776,48 @@ def human(n):
         if n < 1024 or u == units[-1]:
             return ("%d %s" % (n, u)) if u == units[0] else ("%.1f %s" % (n, u))
         n /= 1024.0
+
+
+def es_reload_games():
+    """New games show up in EmulationStation without "Update gamelists" (Batocera, KNULLI).
+    Only when ES is not busy: no game, scraper or update running (it would ask about them)."""
+    try:
+        if b"true" not in urllib.request.urlopen("http://127.0.0.1:1234/isIdle", timeout=3).read():
+            return False
+        urllib.request.urlopen("http://127.0.0.1:1234/reloadgames", timeout=5).read()
+        return True
+    except Exception:
+        return False
+
+
+def notify_screen(text):
+    """On-screen message (EmulationStation on Batocera / KNULLI); silent if unavailable."""
+    try:
+        with open(CONFIG_FILE) as f:
+            if re.search(r'^NOTIFICATIONS="false"', f.read(), re.M):
+                return
+    except OSError:
+        pass
+    try:
+        req = urllib.request.Request("http://127.0.0.1:1234/notify", data=text.encode("utf-8"),
+                                     headers={"Content-Type": "text/plain; charset=utf-8"}, method="POST")
+        urllib.request.urlopen(req, timeout=3).read()
+    except Exception:
+        pass
+
+
+def start_ticker(first, tick):
+    """Message that the work started, then 'still running' once a minute; .set() stops it."""
+    notify_screen(first)
+    stop = threading.Event()
+
+    def loop():
+        n = 0
+        while not stop.wait(60):
+            n += 1
+            notify_screen(tick.format(n=n))
+    threading.Thread(target=loop, daemon=True).start()
+    return stop
 
 
 def log(msg):
@@ -3595,6 +4774,7 @@ def download_file(src, entry, path, progress):
             raise
         except (LinkError, urllib.error.URLError, socket.timeout, ConnectionError, OSError) as e:
             if isinstance(e, OSError) and e.errno == errno.ENOSPC:
+                NO_SPACE["hit"] = True
                 raise LinkError(str(e))
             last = e
             # the part file stays: the next attempt resumes it
@@ -3633,6 +4813,7 @@ def download_member(src, entry, path, progress):
             last = e
         except (zipfile.BadZipFile, urllib.error.URLError, socket.timeout, ConnectionError, OSError) as e:
             if isinstance(e, OSError) and e.errno == errno.ENOSPC:
+                NO_SPACE["hit"] = True
                 _rm(tmp)
                 raise LinkError(str(e))
             last = e
@@ -3806,6 +4987,7 @@ def unpack_archive(path, kind):
                 raise
             except (LinkError, zipfile.BadZipFile, NotImplementedError, OSError) as e:
                 if isinstance(e, OSError) and e.errno == errno.ENOSPC:
+                    NO_SPACE["hit"] = True
                     raise LinkError(t("unpack_no_space"))
                 errors.append(str(e) or e.__class__.__name__)
                 shutil.rmtree(tmp, ignore_errors=True)
@@ -3944,8 +5126,10 @@ def _kill(proc):
 
 # ============================================================== destinations
 MEDIA_DIRS = ("images", "videos", "media", "manuals", "downloaded_images", "downloaded_videos",
-              "screenshots", "thumbnails")
-NOT_GAMES = ("gamelist.xml", "_info.txt")
+              "screenshots", "thumbnails", "bezels", "covers", "backcovers", "3dboxes", "fanart", "marquees",
+              "miximages", "miximages_v2", "physicalmedia", "titlescreens", "wheel", "boxart", "snaps",
+              "downloaded_media", "__macosx", "@eadir", "#recycle", "$recycle.bin", "system volume information")
+NOT_GAMES = ("gamelist.xml", "_info.txt", "Thumbs.db", "desktop.ini")
 
 
 def list_systems():
@@ -4130,6 +5314,7 @@ def run_download(src, plan, dest, url, web=False, quiet=False, confirm=None, sta
         print(t("free_cloud", free=human(free)) if dest.kind == "cloud" else t("free_space", free=human(free)))
     if free is not None and need + dest.reserve() > free:
         msg = t("no_space", need=human(need), free=human(free))
+        NO_SPACE["hit"] = True
         print(msg)
         log(t("log_error", err=msg.lstrip("❌ ")))
         if pre_web:
@@ -4216,11 +5401,12 @@ def run_download(src, plan, dest, url, web=False, quiet=False, confirm=None, sta
                     t("done", ok=ok, skip=skipped, fail=fail).lstrip("✅ "))
     con(t("done", ok=ok, skip=skipped, fail=fail) + "\n")
     log(t("log_done", ok=ok, skip=skipped, fail=fail))
+    reloaded = ok and dest.kind != "cloud" and es_reload_games()
     if ok and not quiet:
         if dest.kind == "cloud":
             con(t("cloud_done", dest=dest.label) + "\n")
         else:
-            con(t("es_hint") + "\n")
+            con(t("es_reloaded" if reloaded else "es_hint") + "\n")
     con_drain()
     return 0 if fail == 0 else 1
 
@@ -4631,6 +5817,7 @@ def main(argv):
             return 1
         if web:
             write_progress(True, 0, 0, 0, 0, 0, 0, 0)
+        ticker = start_ticker('Save Sync: загрузка по ссылке началась', 'Save Sync: загрузка по ссылке ещё идёт ({n} мин)')
         try:
             src, root = load_tree(url, password=password, quiet=True)
             entries = []
@@ -4640,10 +5827,14 @@ def main(argv):
                     raise LinkError("not found: " + rel)
                 entries.append(e)
             plan = build_plan(root, entries)
-            return run_download(src, plan, dest, url, web=web, quiet=True)
+            rc = run_download(src, plan, dest, url, web=web, quiet=True)
+            if rc != 130:
+                notify_screen('Save Sync: загрузка по ссылке завершена' if rc == 0 else ('Save Sync: в облаке не хватает места для загрузки по ссылке' if dest.kind == "cloud" else 'Save Sync: на устройстве не хватает места для загрузки по ссылке') if NO_SPACE["hit"] else 'Save Sync: ошибка загрузки по ссылке')
+            return rc
         except LinkError as e:
             print(e)
             log(t("log_error", err=str(e).splitlines()[0].lstrip("❌ ")))
+            notify_screen(('Save Sync: в облаке не хватает места для загрузки по ссылке' if dest.kind == "cloud" else 'Save Sync: на устройстве не хватает места для загрузки по ссылке') if NO_SPACE["hit"] else 'Save Sync: ошибка загрузки по ссылке')
             if web:
                 write_progress(False, 0, 0, 0, 0, 0, 0, 0, success=False,
                                phase=str(e).splitlines()[0].lstrip("❌ "))
@@ -4652,6 +5843,8 @@ def main(argv):
             if web:
                 write_progress(False, 0, 0, 0, 0, 0, 0, 0, success=False, phase=t("cancelled_web"))
             return 130
+        finally:
+            ticker.set()
 
     DOWNLOADING["interactive"] = True
     signal.signal(signal.SIGHUP, _on_sighup)
@@ -4678,6 +5871,7 @@ LINKEOF
         -e "s|__SS_RCLONE_BIN__|$RCLONE_BIN|g" \
         -e "s|__SS_RCLONE_CONF__|$RCLONE_CONF|g" \
         -e "s|__SS_REMOTE_ROMS__|$REMOTE_ROMS|g" \
+        -e "s|__SS_CONFIG_FILE__|$CONFIG_FILE|g" \
         "$LINK_SCRIPT"
     chmod +x "$LINK_SCRIPT" 2>/dev/null
 }
@@ -4687,40 +5881,58 @@ LINKEOF
 ############################################
 
 create_roms_filter() {
-    # Создаем фильтр с базовыми исключениями
-    cat > "$ROMS_FILTER_FILE" << 'EOF'
-# Фильтр для синхронизации ромов
-# Создан автоматически, не редактируйте вручную
-
-# Исключаем системные файлы
+    # Фильтр rclone: решает первое подходящее правило. Мусор других систем не
+    # синхронизируется никогда, медиа - по настройке, дальше только выбранные системы.
+    local pico=false d
+    IFS='|' read -ra DIRS <<< "$ROMS_SYNC_DIRS"
+    for d in "${DIRS[@]}"; do
+        [ "$(echo "$d" | xargs)" = "pico8" ] && pico=true
+    done
+    {
+        echo "# Фильтр для синхронизации ромов"
+        echo "# Создан автоматически, не редактируйте вручную"
+        echo ""
+        echo "# Служебные файлы и мусор других систем (Mac, Windows, NAS)"
+        cat << 'EOF'
 - **/_info.txt
+- .DS_Store
+- Thumbs.db
+- desktop.ini
+- ._*
+- *:Zone.Identifier
+- *.crdownload
+- __MACOSX/**
+- @eaDir/**
+- #recycle/**
+- $RECYCLE.BIN/**
+- System Volume Information/**
+- .Trash-*/**
+- .Trashes/**
+- .Spotlight-V100/**
+- .fseventsd/**
 EOF
-    
-    # Если медиа выключена - исключаем медиа файлы
-    if [ "$ROMS_SYNC_MEDIA" != "true" ]; then
-        cat >> "$ROMS_FILTER_FILE" << 'EOF'
-
-# Исключаем медиа-папки
-- **/images/**
-- **/media/**
-- **/videos/**
-- **/manuals/**
-- **/screenshots/**
-- **/thumbnails/**
-
-# Исключаем медиа-файлы (изображения)
+        if [ "$ROMS_SYNC_MEDIA" != "true" ]; then
+            echo ""
+            echo "# Медиа-папки"
+            echo "- **/{images,media,videos,manuals,screenshots,thumbnails,bezels,covers,backcovers,3dboxes,fanart,marquees,miximages,miximages_v2,physicalmedia,titlescreens,wheel,boxart,snaps,downloaded_images,downloaded_videos,downloaded_media}/**"
+            if [ "$pico" = true ]; then
+                echo ""
+                echo "# Игры PICO-8 - это картинки (.p8.png): их не исключаем"
+                echo "+ /pico8/**.png"
+            fi
+            echo ""
+            echo "# Картинки"
+            cat << 'EOF'
 - **.png
 - **.jpg
 - **.jpeg
 - **.gif
 - **.bmp
 EOF
-    fi
-    
-    # ВСЕГДА исключаем видео (WebDAV не любит большие файлы)
-    cat >> "$ROMS_FILTER_FILE" << 'EOF'
-
-# Исключаем видео файлы (WebDAV ограничения)
+        fi
+        echo ""
+        echo "# Видео (всегда: большие файлы)"
+        cat << 'EOF'
 - **.mp4
 - **.avi
 - **.webm
@@ -4731,20 +5943,18 @@ EOF
 - **.mpg
 - **.mpeg
 EOF
-    
-    # Добавляем выбранные системы
-    if [ -n "$ROMS_SYNC_DIRS" ]; then
-        IFS='|' read -ra DIRS <<< "$ROMS_SYNC_DIRS"
-        for dir in "${DIRS[@]}"; do
-            dir=$(echo "$dir" | xargs)
-            if [ -n "$dir" ]; then
-                echo "+ /$dir/**" >> "$ROMS_FILTER_FILE"
-            fi
-        done
-    fi
-    
-    # Исключаем всё, что не выбрано
-    echo "- **" >> "$ROMS_FILTER_FILE"
+        if [ -n "$ROMS_SYNC_DIRS" ]; then
+            echo ""
+            echo "# Выбранные системы"
+            for d in "${DIRS[@]}"; do
+                d=$(echo "$d" | xargs)
+                [ -n "$d" ] && echo "+ /$d/**"
+            done
+        fi
+        echo ""
+        echo "# Всё остальное"
+        echo "- **"
+    } > "$ROMS_FILTER_FILE"
 }
 
 ############################################
@@ -4782,7 +5992,7 @@ manage_exclusions() {
             [ -d "$dir" ] || continue
             BASENAME=$(basename "$dir")
             
-            if find "$dir" -type f ! -name "gamelist.xml" ! -name "_info.txt" ! -name "*.dat" ! -name "*.txt" ! -name "*.log" ! -name "*.cache" ! -path "*/images/*" ! -path "*/media/*" ! -path "*/videos/*" 2>/dev/null | head -1 | grep -q .; then
+            if find "$dir" -type f ! -name "gamelist.xml" ! -name "_info.txt" ! -name "*.dat" ! -name "*.txt" ! -name "*.log" ! -name "*.cache" ! -name ".DS_Store" ! -name "Thumbs.db" ! -name "desktop.ini" ! -name "._*" ! -name "*.pdf" ! -name "*.jpg" ! -name "*.mp4" ! -path "*/images/*" ! -path "*/media/*" ! -path "*/videos/*" ! -path "*/manuals/*" ! -path "*/bezels/*" ! -path "*/downloaded_*" ! -path "*/__MACOSX/*" 2>/dev/null | head -1 | grep -q .; then
                 SYSTEMS+=("$BASENAME")
             fi
         done
@@ -5131,7 +6341,7 @@ select_roms_systems() {
         [ -d "$dir" ] || continue
         BASENAME=$(basename "$dir")
         
-        if find "$dir" -type f ! -name "gamelist.xml" ! -name "_info.txt" ! -name "*.dat" ! -name "*.txt" ! -name "*.log" ! -name "*.cache" ! -path "*/images/*" ! -path "*/media/*" ! -path "*/videos/*" 2>/dev/null | head -1 | grep -q .; then
+        if find "$dir" -type f ! -name "gamelist.xml" ! -name "_info.txt" ! -name "*.dat" ! -name "*.txt" ! -name "*.log" ! -name "*.cache" ! -name ".DS_Store" ! -name "Thumbs.db" ! -name "desktop.ini" ! -name "._*" ! -name "*.pdf" ! -name "*.jpg" ! -name "*.mp4" ! -path "*/images/*" ! -path "*/media/*" ! -path "*/videos/*" ! -path "*/manuals/*" ! -path "*/bezels/*" ! -path "*/downloaded_*" ! -path "*/__MACOSX/*" 2>/dev/null | head -1 | grep -q .; then
             SYSTEMS_LIST+=("$BASENAME")
         fi
     done
@@ -5462,12 +6672,10 @@ show_statistics() {
         echo ""
         
         if [ -f "$LOG_FILE" ]; then
-            TOTAL=$(grep -c "Загрузка сохранений\|Выгрузка сохранений" "$LOG_FILE" 2>/dev/null)
-            ERR=$(grep -c "Ошибка\|недоступны" "$LOG_FILE" 2>/dev/null)
-            [ -z "$TOTAL" ] && TOTAL=0
-            [ -z "$ERR" ] && ERR=0
-            OK=$((TOTAL - ERR))
-            [ $OK -lt 0 ] && OK=0
+            sync_stats_counts
+            TOTAL=$((SYNC_OK + SYNC_ERR))
+            OK=$SYNC_OK
+            ERR=$SYNC_ERR
             
             echo "📈 Статистика сохранений:"
             echo "  Всего синхронизаций: $TOTAL"
@@ -5595,33 +6803,10 @@ show_statistics() {
 
 get_status_info() {
     SYSTEM_VERSION="неизвестно"
-    DETECT_METHOD="неизвестно"
     
     if [ -f "/etc/os-release" ]; then
         . /etc/os-release
         SYSTEM_VERSION=$(get_system_version)
-        
-        if [ -n "$ID" ]; then
-            DETECT_METHOD="по /etc/os-release (ID: $ID)"
-        else
-            DETECT_METHOD="по /etc/os-release"
-        fi
-    fi
-    
-    if [ "$SYSTEM" = "KNULLI" ]; then
-        if [ -f "/usr/share/knulli/knulli.version" ]; then
-            DETECT_METHOD="по файлу /usr/share/knulli/knulli.version"
-        elif [ -f "/etc/knulli-release" ]; then
-            DETECT_METHOD="по файлу /etc/knulli-release"
-        fi
-    fi
-    
-    if [ "$SYSTEM" = "Batocera" ]; then
-        if [ -f "/etc/batocera-release" ] && [ -s "/etc/batocera-release" ]; then
-            DETECT_METHOD="по файлу /etc/batocera-release"
-        elif [ -f "/boot/batocera" ] || [ -f "/usr/bin/batocera-es-swissknife" ]; then
-            DETECT_METHOD="по наличию файлов Batocera"
-        fi
     fi
     
     # Загружаем конфиг
@@ -5629,22 +6814,22 @@ get_status_info() {
     
     REAL_INTERVAL=$SYNC_INTERVAL
     REAL_RETRIES=$MAX_RETRIES
-    REAL_MIN_FREE=$MIN_FREE_KB
-    REAL_LOG_SIZE=$MAX_LOG_SIZE
-    
-    if [ -f "$RCLONE_PATH" ]; then
-        RCLONE_STATUS="✓ найден (v$($RCLONE_PATH version 2>/dev/null | head -1 | awk '{print $2}' | sed 's/^v//'))"
-    else
-        RCLONE_STATUS="✗ не найден"
-    fi
     
     if [ -f "$RCLONE_PATH" ] && [ -f "$RCLONE_CONF" ]; then
-        if "$RCLONE_PATH" --config "$RCLONE_CONF" lsd "$REMOTE_NAME:" --contimeout 5s >/dev/null 2>&1; then
-            CLOUD_STATUS="✓ подключено"
-            CLOUD_FREE=$("$RCLONE_PATH" --config "$RCLONE_CONF" about "$REMOTE_NAME:" 2>/dev/null | grep -i "free" | awk '{print $2, $3}')
-            [ -z "$CLOUD_FREE" ] && CLOUD_FREE="неизвестно"
+        # how long the cloud takes to answer is shown too: a slow cloud is not "not connected"
+        T0=$SECONDS
+        if "$RCLONE_PATH" --config "$RCLONE_CONF" lsd "$REMOTE_NAME:" --contimeout 10s --timeout 15s \
+            --low-level-retries 1 --retries 1 >/dev/null 2>&1; then
+            T1=$((SECONDS - T0))
+            if [ "$T1" -gt 3 ]; then CLOUD_STATUS="⚠ медленно (${T1} с)"; else CLOUD_STATUS="✓ подключено"; fi
+            CLOUD_FREE=$(cloud_about | grep -i "^free" | awk '{print $2, $3}')
+            [ -z "$CLOUD_FREE" ] && CLOUD_FREE=$(cloud_free_unknown)
         else
-            CLOUD_STATUS="✗ нет подключения"
+            if timeout 3 bash -c ': > /dev/tcp/1.1.1.1/443' 2>/dev/null || timeout 3 bash -c ': > /dev/tcp/8.8.8.8/443' 2>/dev/null; then
+                CLOUD_STATUS="✗ не отвечает"
+            else
+                CLOUD_STATUS="✗ нет интернета"
+            fi
             CLOUD_FREE="неизвестно"
         fi
     else
@@ -5659,16 +6844,21 @@ get_status_info() {
     # Считаем размер в байтах (как в Python)
     if [ "$FILE_COUNT" -gt 0 ]; then
         FILE_SIZE_BYTES=$(find "$SAVE_DIR" -type f ! -name ".DS_Store" ! -name "Thumbs.db" ! -name "*.log" ! -name "*.cache" ! -name ".keep" ! -name "*.keep" -printf '%s\n' 2>/dev/null | awk '{sum+=$1} END {print sum+0}')
-        if [ -n "$FILE_SIZE_BYTES" ] && [ "$FILE_SIZE_BYTES" -gt 0 ]; then
-            if [ "$FILE_SIZE_BYTES" -gt 1048576 ]; then
-                FILE_SIZE=$(echo "scale=1; $FILE_SIZE_BYTES / 1048576" | bc)
-                FILE_SIZE="${FILE_SIZE} МБ"
-            elif [ "$FILE_SIZE_BYTES" -gt 1024 ]; then
-                FILE_SIZE=$(echo "scale=1; $FILE_SIZE_BYTES / 1024" | bc)
-                FILE_SIZE="${FILE_SIZE} КБ"
-            else
-                FILE_SIZE="${FILE_SIZE_BYTES} Б"
-            fi
+        # find without -printf (busybox on Recalbox) prints nothing: count with python3
+        if [ -z "$FILE_SIZE_BYTES" ] || [ "$FILE_SIZE_BYTES" = "0" ]; then
+            FILE_SIZE_BYTES=$(python3 -c 'import os,sys,fnmatch
+skip=(".DS_Store","Thumbs.db","*.log","*.cache",".keep","*.keep")
+n=0
+for r,d,fs in os.walk(sys.argv[1]):
+    for f in fs:
+        if not any(fnmatch.fnmatch(f,p) for p in skip):
+            try: n+=os.path.getsize(os.path.join(r,f))
+            except OSError: pass
+print(n)' "$SAVE_DIR" 2>/dev/null)
+        fi
+        # awk instead of bc: bc is not on every system
+        if [ -n "$FILE_SIZE_BYTES" ] && [ "$FILE_SIZE_BYTES" -gt 0 ] 2>/dev/null; then
+            FILE_SIZE=$(awk -v n="$FILE_SIZE_BYTES" 'BEGIN { if (n > 1048576) printf "%.1f МБ", n/1048576; else if (n > 1024) printf "%.1f КБ", n/1024; else printf "%d Б", n }')
         else
             FILE_SIZE="0"
         fi
@@ -5720,14 +6910,6 @@ fi
     sync_stats_counts
     SYNC_STATS="$SYNC_NOCHG синхр. ($SYNC_CHG OK, $SYNC_ERR ERR)"
     
-    # ── ИСПОЛЬЗОВАНИЕ ОБЛАКА ──
-    CLOUD_USED=$("$RCLONE_PATH" --config "$RCLONE_CONF" about "$REMOTE_NAME:" 2>/dev/null | grep -i "used" | awk '{print $2, $3}')
-    CLOUD_TOTAL=$("$RCLONE_PATH" --config "$RCLONE_CONF" about "$REMOTE_NAME:" 2>/dev/null | grep -i "total" | awk '{print $2, $3}')
-    if [ -n "$CLOUD_USED" ] && [ -n "$CLOUD_TOTAL" ]; then
-        CLOUD_USED_DISPLAY="$CLOUD_USED из $CLOUD_TOTAL"
-    else
-        CLOUD_USED_DISPLAY="неизвестно"
-    fi
 }
 
 ############################################
@@ -5742,18 +6924,19 @@ show_control_panel() {
         echo ""
         echo "══════════════════════════════════════════════════════════" 
         echo ""
-        echo "           Save Sync - Центр управления v1.4.6"
+        echo "           Save Sync - Центр управления v1.4.7"
         echo "" 
         echo "══════════════════════════════════════════════════════════"
         echo ""
         echo " 🖥️ Система:        $SYSTEM (${CFW_VERSION:-неизвестно})"
         echo " 💾 Сохранений:     $SAVES_STATUS"
-        echo " ☁️ Облако:         $CLOUD_STATUS"
+        echo " ☁️ $(cloud_header_label)$CLOUD_STATUS"
         echo " 📦 Свободно:       $FREE (локально) / $CLOUD_FREE (облако)"
         echo " 🔄 Обновлено:      $LAST_SYNC_STATUS"
         echo " 📊 Статистика:     $SYNC_STATS"
         echo " 📁 Исключения:     $EXCLUDE_DISPLAY"
         echo " ⏱️ Интервал:       $INTERVAL_DISPLAY"
+        echo " 🌐 Веб-интерфейс:  http://$IP_ADDR:8080"
         echo "" 
         echo "──────────────────────────────────────────────────────────"
         echo ""
@@ -5779,7 +6962,7 @@ show_control_panel() {
         echo "  6 - ⏱️ Интервал синхронизации (сейчас: $REAL_INTERVAL сек)"
         echo "  7 - 🔄 Количество попыток (сейчас: $REAL_RETRIES)"
         echo "  8 - 🗂️ Копии при конфликтах (сейчас: $(keep_days_label))"
-        echo "  9 - 🔔 Уведомления на экране (сейчас: $(notify_label))"
+        echo "  9 - 🎮 Синхронизация (сейчас: $(sync_mode_label))"
         echo ""
         
         echo " ── ИНФОРМАЦИЯ ──"
@@ -5788,19 +6971,17 @@ show_control_panel() {
         echo ""
         
         echo " ── СИСТЕМА ──"
-        echo " 12 - 🗑️ Очистить временные файлы"
-        echo " 13 - 🔄 Перезагрузить устройство"
-        echo ""
-        
-        echo " ── ВЕБ-ИНТЕРФЕЙС ──"
-        echo "      🌐 http://$IP_ADDR:8080"
-        echo " 14 - 🔄 Перезапустить веб-интерфейс"
+        echo " 12 - 🔔 Уведомления на экране (сейчас: $(notify_label))"
+        echo " 13 - 🗑️ Очистить временные файлы"
+        echo " 14 - 🔄 Перезагрузить устройство"
+        echo " 15 - 🌐 Перезапустить веб-интерфейс"
+        echo " 16 - ☁️ Сменить облако"
         echo ""
         echo "──────────────────────────────────────────────────────────"
         echo "  0 - 🚪 Выход"
         echo "══════════════════════════════════════════════════════════"
         echo ""
-        read -p "Выберите действие (0-14): " choice
+        read -p "Выберите действие (0-16): " choice
         
         case $choice in
             1) 
@@ -5903,12 +7084,12 @@ show_control_panel() {
                         echo "✅ Полная синхронизация завершена!"
                     else
                         echo ""
-                        echo "❌ Выгрузка не удалась. Подробности: пункт 9 (Статистика и логи)."
+                        echo "❌ Выгрузка не удалась. Подробности: пункт 10 (Статистика и логи)."
                     fi
                 else
                     echo ""
                     echo "❌ Загрузка не удалась - выгрузка не выполнялась."
-                    echo "   Подробности: пункт 9 (Статистика и логи)."
+                    echo "   Подробности: пункт 10 (Статистика и логи)."
                 fi
                 echo ""
                 pause
@@ -5989,7 +7170,8 @@ show_control_panel() {
                 echo ""
                 echo "Если одно и то же сохранение изменили на разных устройствах,"
                 echo "остаётся самая новая версия. Более старую можно хранить в облаке"
-                echo "(папка GameSaves_conflicts), чтобы при необходимости вернуть её вручную."
+                echo "(папка GameSaves_conflicts) и вернуть в веб-интерфейсе (Сохранения)."
+                echo "При «Не хранить» устройство не делает копий и не удаляет чужие."
                 echo "Сколько дней хранить такие копии?"
                 echo " 1 - Не хранить"
                 echo " 2 - 1 день"
@@ -6012,14 +7194,12 @@ show_control_panel() {
                 echo ""
                 pause
                 ;;
-            9)
+            12)
                 echo ""
                 echo "Сейчас: $(notify_label)"
                 echo ""
-                echo "После синхронизации на экране появляется короткое сообщение:"
-                echo "что получено, отправлено, или что произошла ошибка. Если"
-                echo "изменений нет, сообщения нет."
-                echo "Работает на Batocera и KNULLI. На Recalbox уведомления не поддерживаются."
+                echo "Короткие уведомления о синхронизации"
+                echo "и загрузках. Работает на Batocera и KNULLI."
                 echo ""
                 echo " 1 - Включить"
                 echo " 2 - Выключить"
@@ -6036,6 +7216,45 @@ show_control_panel() {
                 echo ""
                 pause
                 ;;
+            9)
+                echo ""
+                echo "Сейчас: $(sync_mode_label)"
+                echo ""
+                echo "Как синхронизироваться после выхода из игры:"
+                echo ""
+                echo " 1 - Только при изменениях"
+                echo "     Сохранения менялись - синхронизация"
+                echo "     как в режиме «После каждой игры». Не"
+                echo "     менялись - облако не запрашивается, а"
+                echo "     изменения с других устройств придут при"
+                echo "     включении устройства или после игры,"
+                echo "     в которой сохранения изменятся."
+                echo " 2 - После каждой игры"
+                echo "     Отправляются и загружаются изменения"
+                echo "     и удаления, без полного списка файлов"
+                echo "     в облаке. Подходит для игры на"
+                echo "     нескольких устройствах."
+                echo " 3 - Полная"
+                echo "     После каждой игры сверяется весь список"
+                echo "     файлов в облаке, включая добавленные"
+                echo "     в облако вручную. Самая медленная."
+                echo ""
+                echo "При включении устройства и ручном запуске"
+                echo "синхронизация всегда полная."
+                echo ""
+                read -p "Выберите (1-3): " mode_choice
+                case "$mode_choice" in
+                    1) SYNC_MODE="economy" ;;
+                    2) SYNC_MODE="fast" ;;
+                    3) SYNC_MODE="full" ;;
+                    *) echo "❌ Неверный выбор"; pause; continue ;;
+                esac
+                save_config
+                echo ""
+                echo "✅ Синхронизация: $(sync_mode_label)"
+                echo ""
+                pause
+                ;;
             10)
                 show_statistics
                 ;;
@@ -6045,7 +7264,7 @@ show_control_panel() {
                 echo ""
                 pause
                 ;;
-            12)
+            13)
                 echo ""
                 echo " 🗑️  Очистка временных файлов"
                 echo ""
@@ -6064,7 +7283,7 @@ show_control_panel() {
                 echo ""
                 pause
                 ;;
-            13)
+            14)
                 echo ""
                 echo "⚠️ ВНИМАНИЕ!"
                 echo "Устройство будет перезагружено."
@@ -6081,7 +7300,7 @@ show_control_panel() {
                 echo ""
                 pause
                 ;;
-            14)
+            15)
                 echo ""
                 echo "🔄 Перезапуск веб-интерфейса..."
                 STOPPED=false
@@ -6101,6 +7320,125 @@ show_control_panel() {
                 bash "$0" --web &
                 echo "✅ Веб-интерфейс перезапущен"
                 echo "🌐 Откройте: http://$IP_ADDR:8080"
+                echo ""
+                pause
+                ;;
+            16)
+                echo ""
+                echo "Сейчас: $(cloud_label "$RCLONE_CONF")"
+                echo ""
+                echo "Смена облака для сохранений и ромов."
+                echo "Старое облако не изменяется: всё в нём остаётся."
+                echo ""
+                if sync_busy; then
+                    echo "⚠️  Сейчас идёт синхронизация."
+                    echo "   Если старое облако не отвечает, она может идти долго."
+                    read -p "Остановить её и сменить облако? (y/n): " stop_now
+                    if [ "$stop_now" != "y" ] && [ "$stop_now" != "Y" ]; then
+                        echo "❌ Отменено. Облако не изменено."
+                        echo ""
+                        pause
+                        continue
+                    fi
+                    echo "⏹️  Остановка синхронизации..."
+                    if ! stop_sync; then
+                        echo "❌ Не удалось остановить синхронизацию. Попробуйте позже."
+                        echo ""
+                        pause
+                        continue
+                    fi
+                    echo "✅ Синхронизация остановлена."
+                    echo ""
+                fi
+                NEW_CONF="$RCLONE_CONF.new"
+                rm -f "$NEW_CONF"
+                if ! ask_cloud_config "$NEW_CONF" cancel; then
+                    rm -f "$NEW_CONF"
+                    pause
+                    continue
+                fi
+                echo "Проверка подключения..."
+                if ! cloud_check "$NEW_CONF"; then
+                    rm -f "$NEW_CONF"
+                    echo "❌ Не удалось подключиться. Облако не изменено."
+                    [ -n "$CLOUD_ERR" ] && echo "   Причина: $CLOUD_ERR"
+                    echo ""
+                    pause
+                    continue
+                fi
+                echo "✅ Подключение успешно."
+                echo ""
+                echo "Что сделать с сохранениями:"
+                echo ""
+                echo " 1 - Сделать облако копией этого устройства"
+                echo "     Сохранения в облаке станут такими же,"
+                echo "     как здесь: недостающие загрузятся,"
+                echo "     отличающиеся заменятся, лишние удалятся."
+                echo "     Для первого устройства."
+                echo " 2 - Объединить сохранения с облаком"
+                echo "     Чужие скачаются, свои загрузятся,"
+                echo "     ничего не удалится. Для остальных"
+                echo "     устройств, когда облако уже заполнено."
+                echo " 0 - Отмена"
+                echo ""
+                read -p "Выберите (0-2): " cloud_mode
+                if [ "$cloud_mode" != "1" ] && [ "$cloud_mode" != "2" ]; then
+                    rm -f "$NEW_CONF"
+                    echo "❌ Отменено. Облако не изменено."
+                    echo ""
+                    pause
+                    continue
+                fi
+                if [ "$cloud_mode" = "1" ]; then
+                    echo ""
+                    echo "⚠️  Папка GameSaves в новом облаке станет копией"
+                    echo "    сохранений этого устройства. Сохранения систем,"
+                    echo "    для которых здесь нет игр, не затрагиваются."
+                    read -p "Продолжить? (y/n): " confirm
+                    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+                        rm -f "$NEW_CONF"
+                        echo "❌ Отменено. Облако не изменено."
+                        echo ""
+                        pause
+                        continue
+                    fi
+                fi
+                # прежние настройки остаются в rclone.conf.bak
+                cp -f "$RCLONE_CONF" "$RCLONE_CONF.bak" 2>/dev/null
+                mv -f "$NEW_CONF" "$RCLONE_CONF"
+                chmod 600 "$RCLONE_CONF"
+                # память о прошлой синхронизации относится к старому облаку
+                rm -f "$BASE/.sync_base.json"
+                if [ -f "$STATE_FILE" ]; then
+                    sed -i -e '/^PENDING_UPLOAD=/d' -e '/^MARKER_DONE=/d' "$STATE_FILE"
+                fi
+                "$RCLONE_PATH" --config "$RCLONE_CONF" mkdir "$REMOTE" >/dev/null 2>&1
+                load_config
+                echo ""
+                if [ "$cloud_mode" = "1" ]; then
+                    echo "🔄 Облако заполняется сохранениями этого устройства..."
+                    SS_RCLONE="$RCLONE_PATH" SS_EXCLUDED="$EXCLUDED_SYSTEMS" SS_RETRIES="$MAX_RETRIES" \
+                        python3 "$ENGINE_SCRIPT" sync --mirror --verbose
+                    RC=$?
+                    MODE_TXT="копия устройства"
+                else
+                    echo "🔄 Синхронизация с облаком..."
+                    bash "$DOWNLOAD_SCRIPT" --verbose
+                    RC=$?
+                    MODE_TXT="объединение"
+                fi
+                echo ""
+                if [ $RC -eq 0 ]; then
+                    log_msg "Облако изменено: $(cloud_label "$RCLONE_CONF") ($MODE_TXT)"
+                    echo "✅ Облако изменено: $(cloud_label "$RCLONE_CONF")"
+                    echo "   Остальные устройства переключите так же,"
+                    echo "   выбрав «Объединить сохранения с облаком»."
+                else
+                    log_msg "Облако изменено: $(cloud_label "$RCLONE_CONF") ($MODE_TXT) - синхронизация не завершилась"
+                    echo "⚠️  Облако изменено, но синхронизация не завершилась."
+                    echo "   Она повторится при следующем выходе из игры"
+                    echo "   или включении устройства, ничего не потеряется."
+                fi
                 echo ""
                 pause
                 ;;
@@ -6142,7 +7480,7 @@ restart_web_after_update() {
 start_web() {
     echo ""
     echo "══════════════════════════════════════════════════════════"
-    echo " 🌐 Save Sync - Веб-интерфейс v1.4.6"
+    echo " 🌐 Save Sync - Веб-интерфейс v1.4.7"
     echo "══════════════════════════════════════════════════════════"
     echo ""
     
@@ -6221,7 +7559,114 @@ LINK_SCRIPT = "__SS_LINK_SCRIPT__"
 LINK_PID_FILE = "/tmp/save_sync_link.pid"
 OP_FILE = "/tmp/save_sync_op.json"
 
+CLOUD_CHECK = {}                    # last connection check: result and when it was made
+CLOUD_CHECK_LOCK = threading.Lock()
+CLOUD_ABOUT_CACHE = {}              # last known cloud volume (free / used / total)
+CLOUD_ABOUT_LOCK = threading.Lock()
+
+
+
+def cloud_check():
+    """-> (connected, seconds). The time is shown when the cloud answers slowly; a slow
+    cloud is given up to 15 s and is not reported as "not connected". Parallel status
+    requests share one check made less than 8 s ago."""
+    with CLOUD_CHECK_LOCK:
+        if CLOUD_CHECK and time.time() - CLOUD_CHECK["t"] < 8:
+            return CLOUD_CHECK["res"]
+        t0 = time.time()
+        try:
+            r = subprocess.run([RCLONE_PATH, "--config", RCLONE_CONF, "lsd", "cloud:",
+                                "--contimeout", "10s", "--timeout", "15s",
+                                "--low-level-retries", "1", "--retries", "1"],
+                               capture_output=True, timeout=17)
+            ok = r.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+        res = (ok, time.time() - t0)
+        CLOUD_CHECK.update(res=res, t=time.time())
+        return res
+
+
+def cloud_service():
+    """Name of the cloud service in rclone.conf (no login), for the status card."""
+    try:
+        with open(RCLONE_CONF) as f:
+            conf = f.read()
+    except OSError:
+        return ""
+    if re.search(r"^type = mega", conf, re.M):
+        return "Mega"
+    m = re.search(r"^url = (.*)$", conf, re.M)
+    url = m.group(1) if m else ""
+    for key, name in (("yandex", "Яндекс.Диск"), ("mail.ru", "Облако Mail.ru"), ("pcloud", "pCloud"),
+                      ("koofr", "Koofr"), ("fastmail", "Fastmail")):
+        if key in url:
+            return name
+    return "WebDAV" if url else ""
+
+
+def host_allowed(host):
+    """The web interface answers only when it is opened by an IP address, localhost or a
+    local name of the device (batocera, knulli.local...). A request for a domain name
+    pointed at the device for a while (DNS rebinding) is refused."""
+    if not host:
+        return True                        # HTTP/1.0 without Host: not a browser
+    name = host.strip().lower()
+    if name.startswith("["):               # [IPv6]:port
+        name = name[1:name.find("]")] if "]" in name else name[1:]
+    elif name.count(":") == 1:
+        name = name.split(":", 1)[0]
+    name = name.rstrip(".")
+    try:
+        socket.inet_pton(socket.AF_INET6 if ":" in name else socket.AF_INET, name)
+        return True
+    except (OSError, ValueError):
+        pass
+    return name == "localhost" or "." not in name or name.endswith(".local") \
+        or name == socket.gethostname().lower()
+
+
+# What in a ROM folder is not a game (the same lists as in the sync engine). PICO-8
+# games are .p8.png pictures, so pictures count as games there.
+MEDIA_DIRS_ALL = {"images", "media", "videos", "manuals", "bezels", "covers", "backcovers", "3dboxes", "fanart",
+                  "marquees", "miximages", "miximages_v2", "physicalmedia", "screenshots", "thumbnails",
+                  "titlescreens", "wheel", "boxart", "snaps", "downloaded_images", "downloaded_videos",
+                  "downloaded_media", "__macosx", "@eadir", "#recycle", "$recycle.bin", "system volume information"}
+NOT_GAME_EXT = (".xml", ".txt", ".dat", ".log", ".cache", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".mp4",
+                ".avi", ".mkv", ".webm", ".pdf", ".nfo", ".md", ".db", ".tmp", ".bak", ".crdownload", ".partial")
+NOT_GAME_NAMES = {".ds_store", "thumbs.db", "desktop.ini", ".keep", ".gitkeep", ".localized"}
+
+
+def system_has_games(path, system):
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [x for x in dirs if not x.startswith(".") and x.lower() not in MEDIA_DIRS_ALL]
+        for f in files:
+            low = f.lower()
+            if low.endswith(NOT_GAME_EXT) or low in NOT_GAME_NAMES or low.startswith("._"):
+                continue
+            if low.endswith(".png") and system != "pico8":
+                continue
+            return True
+    return False
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
+    def request_allowed(self, change):
+        """Commands (POST) are taken only from the page of the web interface itself:
+        a browser adds Origin to requests sent by other sites, and a page cannot fake it.
+        Requests without Origin (curl, scripts) are not from a browser and are allowed."""
+        host = self.headers.get("Host", "")
+        if not host_allowed(host):
+            return False
+        if change:
+            origin = self.headers.get("Origin")
+            if origin is not None:
+                if origin.strip().lower() == "null":
+                    return False
+                if urllib.parse.urlparse(origin).netloc.lower() != host.strip().lower():
+                    return False
+        return True
+
     def log_message(self, format, *args):
         pass
     
@@ -6252,15 +7697,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
             current = self.read_config()
             for key, value in config.items():
                 current[key] = value
+
+            # конфиг подключается скриптами синхронизации как shell-код:
+            # числа только цифрами, переключатели только true/false, в тексте
+            # нет символов, которые выходят за пределы кавычек
+            int_def = {"SYNC_INTERVAL": 0, "MAX_RETRIES": 3, "CONFLICT_KEEP_DAYS": 3,
+                       "MIN_FREE_KB": 51200, "MAX_LOG_SIZE": 102400, "LOG_KEEP_COUNT": 3}
+            bool_def = {"NOTIFICATIONS": "true", "SKIP_UNCHANGED": "true",
+                        "ROMS_SYNC_MEDIA": "false", "LOG_ENABLED": "true"}
+            for key in list(current):
+                val = str(current[key]).strip()
+                if key in int_def:
+                    try:
+                        num = int(float(val))
+                        current[key] = str(num) if num >= 0 else str(int_def[key])
+                    except Exception:
+                        current[key] = str(int_def[key])
+                elif key in bool_def:
+                    val = val.lower()
+                    current[key] = val if val in ("true", "false") else bool_def[key]
+                elif key == "LOG_LEVEL":
+                    current[key] = val if val in ("info", "debug") else "info"
+                else:
+                    current[key] = re.sub(r'["$`\\\r\n]', "", val)
+            if current.get("SYNC_MODE") not in ("full", "fast", "economy"):
+                current["SYNC_MODE"] = "full" if current.get("SKIP_UNCHANGED") == "false" else "economy"
             with open(CONFIG_FILE, "w") as f:
                 f.write("# ========================================\n")
-                f.write("# Save Sync v1.4.6 - Главный конфиг\n")
+                f.write("# Save Sync v1.4.7 - Главный конфиг\n")
                 f.write("# ========================================\n\n")
                 f.write("# ---- НАСТРОЙКИ СИНХРОНИЗАЦИИ ----\n")
                 f.write(f'SYNC_INTERVAL="{current.get("SYNC_INTERVAL", 0)}"\n')
                 f.write(f'MAX_RETRIES="{current.get("MAX_RETRIES", 3)}"\n')
                 f.write(f'CONFLICT_KEEP_DAYS="{current.get("CONFLICT_KEEP_DAYS", 3)}"\n')
                 f.write(f'NOTIFICATIONS="{current.get("NOTIFICATIONS", "true")}"\n')
+                f.write(f'SYNC_MODE="{current.get("SYNC_MODE", "economy")}"\n')
                 f.write(f'MIN_FREE_KB="{current.get("MIN_FREE_KB", 51200)}"\n\n')
                 f.write("# ---- НАСТРОЙКИ РОМОВ ----\n")
                 f.write(f'ROMS_SYNC_DIRS="{current.get("ROMS_SYNC_DIRS", "")}"\n')
@@ -6379,64 +7850,39 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return "Неизвестно"
     
     def update_roms_filter(self):
+        """The same filter as create_roms_filter() in the control panel."""
         config = self.read_config()
-        roms_sync_dirs = config.get("ROMS_SYNC_DIRS", "")
-        roms_sync_media = config.get("ROMS_SYNC_MEDIA", "false")
-        
+        dirs = [d.strip() for d in config.get("ROMS_SYNC_DIRS", "").split("|") if d.strip()]
+        media = config.get("ROMS_SYNC_MEDIA", "false") == "true"
+        lines = ["# Фильтр для синхронизации ромов", "# Создан автоматически, не редактируйте вручную", "", "# Служебные файлы и мусор других систем (Mac, Windows, NAS)"]
+        lines += ['- **/_info.txt', '- .DS_Store', '- Thumbs.db', '- desktop.ini', '- ._*', '- *:Zone.Identifier', '- *.crdownload', '- __MACOSX/**', '- @eaDir/**', '- #recycle/**', '- $RECYCLE.BIN/**', '- System Volume Information/**', '- .Trash-*/**', '- .Trashes/**', '- .Spotlight-V100/**', '- .fseventsd/**']
+        if not media:
+            lines += ["", "# Медиа-папки", "- **/{images,media,videos,manuals,screenshots,thumbnails,bezels,covers,backcovers,3dboxes,fanart,marquees,miximages,miximages_v2,physicalmedia,titlescreens,wheel,boxart,snaps,downloaded_images,downloaded_videos,downloaded_media}/**"]
+            if "pico8" in dirs:
+                lines += ["", "# Игры PICO-8 - это картинки (.p8.png): их не исключаем", "+ /pico8/**.png"]
+            lines += ["", "# Картинки"] + ['- **.png', '- **.jpg', '- **.jpeg', '- **.gif', '- **.bmp']
+        lines += ["", "# Видео (всегда: большие файлы)"] + ['- **.mp4', '- **.avi', '- **.webm', '- **.wmv', '- **.mkv', '- **.mov', '- **.m4v', '- **.mpg', '- **.mpeg']
+        if dirs:
+            lines += ["", "# Выбранные системы"] + ["+ /%s/**" % d for d in dirs]
+        lines += ["", "# Всё остальное", "- **"]
         try:
             with open(ROMS_FILTER_FILE, "w") as f:
-                f.write("# Фильтр для синхронизации ромов\n")
-                f.write("# Создан автоматически, не редактируйте вручную\n\n")
-                f.write("# Исключаем системные файлы\n")
-                f.write("- **/_info.txt\n\n")
-                if roms_sync_media != "true":
-                    f.write("# Исключаем медиа-папки\n")
-                    f.write("- **/images/**\n")
-                    f.write("- **/media/**\n")
-                    f.write("- **/videos/**\n")
-                    f.write("- **/manuals/**\n")
-                    f.write("- **/screenshots/**\n")
-                    f.write("- **/thumbnails/**\n\n")
-                    f.write("# Исключаем медиа-файлы\n")
-                    f.write("- **.png\n")
-                    f.write("- **.jpg\n")
-                    f.write("- **.jpeg\n")
-                    f.write("- **.gif\n")
-                    f.write("- **.bmp\n\n")
-                f.write("# Исключаем видео файлы\n")
-                f.write("- **.mp4\n")
-                f.write("- **.avi\n")
-                f.write("- **.webm\n")
-                f.write("- **.wmv\n")
-                f.write("- **.mkv\n")
-                f.write("- **.mov\n")
-                f.write("- **.m4v\n")
-                f.write("- **.mpg\n")
-                f.write("- **.mpeg\n\n")
-                if roms_sync_dirs:
-                    f.write("# Добавляем выбранные системы\n")
-                    for dir in roms_sync_dirs.split("|"):
-                        dir = dir.strip()
-                        if dir:
-                            f.write(f"+ /{dir}/**\n")
-                    f.write("\n")
-                f.write("# Исключаем всё, что не выбрано\n")
-                f.write("- **\n")
+                f.write("\n".join(lines) + "\n")
             return True
-        except:
+        except OSError:
             return False
-    
+
     def get_stats(self):
         stats = {"sync": {"total": 0, "ok": 0, "changed": 0, "unchanged": 0, "error": 0}, "roms": {"total": 0, "ok": 0, "error": 0}}
         if os.path.exists(LOG_FILE):
             try:
                 with open(LOG_FILE, "r") as f:
                     content = f.read()
-                    stats["sync"]["ok"] = len(re.findall(r"Сохранения загружены|Выгрузка сохранений", content))
+                    stats["sync"]["ok"] = len(re.findall(r"Сохранения загружены|Выгрузка сохранений|Синхронизация(?: вручную)? \(", content))
                     # "(изменений нет)" / "(no changes)": the sync ran fine, but everything already matched
-                    # with changes = the log line says what was moved ("(sent: 1, ...)"); a plain line or "(изменений нет)" means nothing was transferred
-                    noted = len(re.findall(r"(?:Сохранения загружены|Выгрузка сохранений) \(", content))
-                    empty = len(re.findall(r"(?:Сохранения загружены|Выгрузка сохранений) \(изменений нет\)", content))
+                    # with changes = the log line says what was moved ("(sent: 1, ...)"); a plain line or "(нет изменений)" means nothing was transferred
+                    noted = len(re.findall(r"(?:Сохранения загружены|Выгрузка сохранений|Синхронизация(?: вручную)?) \(", content))
+                    empty = len(re.findall(r"(?:Сохранения загружены|Выгрузка сохранений|Синхронизация(?: вручную)?) \((?:изменений нет|нет изменений)\)", content))
                     stats["sync"]["changed"] = noted - empty
                     stats["sync"]["unchanged"] = stats["sync"]["ok"] - stats["sync"]["changed"]
                     stats["sync"]["total"] = stats["sync"]["ok"]
@@ -6450,6 +7896,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return stats
 
     def do_GET(self):
+        if not self.request_allowed(False):
+            self.send_error(403)
+            return
         if self.path == "/" or self.path == "/index.html":
             self.send_html(HTML)
             return
@@ -6475,10 +7924,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.api_theme()
         elif path == "/api/link/dests":
             self.api_link_dests(parsed.query)
+        elif path == "/api/conflicts":
+            self.api_conflicts()
         else:
             self.send_error(404)
 
     def do_POST(self):
+        if not self.request_allowed(True):
+            self.send_error(403)
+            return
         parsed = urllib.parse.urlparse(self.path)
         
         if parsed.path == "/api/sync":
@@ -6501,6 +7955,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.api_link_cancel()
         elif parsed.path == "/api/cancel":
             self.api_cancel()
+        elif parsed.path == "/api/conflicts/restore":
+            self.api_conflict_action("restore")
+        elif parsed.path == "/api/conflicts/delete":
+            self.api_conflict_action("delete")
         else:
             self.send_error(404)
 
@@ -6535,7 +7993,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "version": system_version,
             "config": config,
             "saves": {"count": 0, "size": "0"},
-            "cloud": {"status": "disconnected", "free": "0", "used": "0", "total": "0"},
+            "cloud": {"status": "disconnected", "free": "0", "used": "0", "total": "0", "service": cloud_service()},
             "last_sync": {"status": "UNKNOWN", "time": "—"},
             "internet": False,
             "scripts": {
@@ -6571,27 +8029,47 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # Облако
         if os.path.exists(RCLONE_PATH) and os.path.exists(RCLONE_CONF):
             try:
-                result = subprocess.run(
-                    [RCLONE_PATH, "--config", RCLONE_CONF, "lsd", "cloud:", "--contimeout", "3s"],
-                    capture_output=True,
-                    timeout=5
-                )
-                if result.returncode == 0:
+                connected, took = cloud_check()
+                if connected:
                     status["cloud"]["status"] = "connected"
-                    about = subprocess.run(
-                        [RCLONE_PATH, "--config", RCLONE_CONF, "about", "cloud:"],
-                        capture_output=True,
-                        text=True,
-                        timeout=5
-                    )
-                    if about.returncode == 0:
-                        for line in about.stdout.split("\n"):
-                            if "Total:" in line:
-                                status["cloud"]["total"] = line.split(":", 1)[1].strip()
-                            elif "Used:" in line:
-                                status["cloud"]["used"] = line.split(":", 1)[1].strip()
-                            elif "Free:" in line:
-                                status["cloud"]["free"] = line.split(":", 1)[1].strip()
+                    if took > 3:
+                        status["cloud"]["slow"] = int(round(took))
+                    # The volume is asked at most once a minute and given more time: on a slow
+                    # network "about" can take longer than a few seconds. If it fails, the last
+                    # known values are shown instead of 0.
+                    with CLOUD_ABOUT_LOCK:
+                        cached = CLOUD_ABOUT_CACHE.get("vals")
+                        fresh = cached and time.time() - CLOUD_ABOUT_CACHE.get("t", 0) < 60
+                    if fresh:
+                        status["cloud"].update(cached)
+                    else:
+                        try:
+                            about = subprocess.run(
+                                [sys.executable or "python3", os.path.join(BASE, "sync_engine.py"), "about"],
+                                env=dict(os.environ, SS_RCLONE=RCLONE_PATH),
+                                capture_output=True,
+                                text=True,
+                                timeout=20
+                            )
+                            vals = {}
+                            if about.returncode == 0:
+                                for line in about.stdout.split("\n"):
+                                    if "Total:" in line:
+                                        vals["total"] = line.split(":", 1)[1].strip()
+                                    elif "Used:" in line:
+                                        vals["used"] = line.split(":", 1)[1].strip()
+                                    elif "Free:" in line:
+                                        vals["free"] = line.split(":", 1)[1].strip()
+                            if vals:
+                                with CLOUD_ABOUT_LOCK:
+                                    CLOUD_ABOUT_CACHE["vals"] = vals
+                                    CLOUD_ABOUT_CACHE["t"] = time.time()
+                                status["cloud"].update(vals)
+                            elif cached:
+                                status["cloud"].update(cached)
+                        except Exception:
+                            if cached:
+                                status["cloud"].update(cached)
             except:
                 pass
         
@@ -6699,22 +8177,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return out
 
     def api_systems(self):
+        # (system_has_games: a system folder with games, not only media or leftovers)
         systems = []
         if os.path.exists(ROMS_DIR):
             for d in os.listdir(ROMS_DIR):
                 path = os.path.join(ROMS_DIR, d)
                 if os.path.isdir(path):
-                    has_roms = False
-                    for root, dirs, files in os.walk(path):
-                        if any(x in root for x in ["/images/", "/media/", "/videos/"]):
-                            continue
-                        for f in files:
-                            if not f.endswith((".xml", ".txt", ".dat", ".png", ".jpg", ".jpeg", ".gif", ".bmp")):
-                                has_roms = True
-                                break
-                        if has_roms:
-                            break
-                    if has_roms:
+                    if system_has_games(path, d):
                         systems.append(d)
         
         # Дополнительно проверяем облако - там могут быть системы,
@@ -6850,7 +8319,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             result["error"] = str(e)
 
+        # what the save sync is doing now (written by the sync engine); rclone transfer
+        # figures are used only when they belong to the current stage, not an earlier one
+        stage_file = "/tmp/save_sync_stage.json"
+        stage = None
+        try:
+            if os.path.exists(stage_file) and os.path.exists(progress_file) and \
+                    os.path.getmtime(stage_file) >= os.path.getmtime(progress_file) - 1:
+                with open(stage_file, "r") as f:
+                    stage = json.load(f)
+        except Exception:
+            stage = None
         stats = self._read_rclone_stats()
+        if stage and isinstance(stage, dict):
+            result["stage"] = stage.get("text", "")
+            log_file = "/tmp/save_sync_progress.log"
+            fresh = (stage.get("kind") in ("send", "recv") and os.path.exists(log_file)
+                     and os.path.getmtime(log_file) >= os.path.getmtime(stage_file))
+            if not fresh:
+                stats = None
         if stats:
             total = stats.get("totalBytes", 0) or 0
             done = stats.get("bytes", 0) or 0
@@ -7239,6 +8726,62 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except OSError:
                 pass
 
+    def _engine(self, args, timeout):
+        """Runs sync_engine.py with the settings of this device."""
+        config = self.read_config()
+        env = dict(os.environ, SS_RCLONE=RCLONE_PATH, SS_EXCLUDED=config.get("EXCLUDED_SYSTEMS", "") or "",
+                   SS_KEEP_DAYS=str(config.get("CONFLICT_KEEP_DAYS", "3") or "3"))
+        return subprocess.run([sys.executable or "python3", os.path.join(BASE, "sync_engine.py")] + args,
+                              env=env, capture_output=True, text=True, timeout=timeout)
+
+    def api_conflicts(self):
+        try:
+            r = self._engine(["conflicts"], 60)
+            if r.returncode == 0:
+                self.send_json({"success": True, "items": json.loads(r.stdout or "[]")})
+                return
+        except Exception:
+            pass
+        self.send_json({"success": False, "error": 'Не удалось получить список конфликтов'})
+
+    def api_conflict_action(self, action):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            cid = str(json.loads(self.rfile.read(length) or b"{}").get("id", "")) if length else ""
+        except (ValueError, AttributeError):
+            cid = ""
+        if not cid:
+            self.send_json({"success": False, "error": 'Нет данных'})
+            return
+        try:
+            if action == "delete":
+                r = self._engine(["drop", cid], 60)
+                if r.returncode == 0:
+                    self.send_json({"success": True})
+                else:
+                    self.send_json({"success": False, "error": 'Не удалось удалить копию'})
+                return
+            r = self._engine(["restore", cid], 300)
+            if r.returncode == 3:
+                self.send_json({"success": False, "error": 'Сейчас идёт синхронизация - попробуйте через минуту'})
+                return
+            if r.returncode != 0:
+                self.send_json({"success": False, "error": 'Не удалось вернуть версию'})
+                return
+            # the restored save is a change on this device: the sync sends it everywhere
+            try:
+                with open("/tmp/save_sync_progress.json", "w") as f:
+                    json.dump({"active": False, "action": "upload", "phase": "", "percent": None, "success": None}, f)
+                with open("/tmp/save_sync_progress.log", "w") as f:
+                    pass
+            except OSError:
+                pass
+            self._spawn_op("upload", ["bash", UPLOAD_SCRIPT, "--web-progress"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.send_json({"success": True, "message": 'Версия возвращена, идёт синхронизация'})
+        except Exception:
+            self.send_json({"success": False, "error": 'Не удалось вернуть версию'})
+
     def api_cancel(self):
         pid = self._link_pid()
         if pid is not None:
@@ -7618,6 +9161,18 @@ body{font-family:'Roboto','Segoe UI',system-ui,sans-serif;background:var(--bg-pr
 .stats-item .num{font-size:24px;font-weight:500;color:var(--text-primary)}
 .stats-item .num.ok{color:var(--success)}
 .stats-item .num.error{color:var(--error)}
+.roms-stats{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 18px}
+.roms-stats .chip{display:inline-flex;align-items:center;white-space:nowrap;gap:6px;padding:5px 12px;border-radius:999px;background:var(--bg-card);border:1px solid var(--border-color);font-size:13px;color:var(--text-secondary)}
+.roms-stats .chip b{font-weight:600;color:var(--text-primary)}
+.roms-stats .chip.ok b{color:var(--success)}
+.roms-stats .chip.err b{color:var(--error)}
+.roms-stats .chip.err{border-color:var(--error)}
+@media (max-width:600px){
+  /* on a phone: three small tiles in one row, the number above its label */
+  .roms-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+  .roms-stats .chip{flex-direction:column-reverse;justify-content:center;gap:1px;padding:6px 4px;border-radius:12px;font-size:11px;min-width:0;white-space:normal;text-align:center;line-height:1.2}
+  .roms-stats .chip b{font-size:17px}
+}
 .stats-item .label{font-size:11px;color:var(--text-secondary);margin-top:4px}
 
 /* ========== СИСТЕМЫ ========== */
@@ -7646,6 +9201,16 @@ body{font-family:'Roboto','Segoe UI',system-ui,sans-serif;background:var(--bg-pr
 .sync-note{margin-top:6px;padding:10px 16px;background:var(--bg-card);border-radius:var(--radius);border-left:4px solid var(--warning);font-size:11px;color:var(--text-secondary);line-height:1.6;box-shadow:var(--elevation-0)}
 .sync-note p{margin:3px 0}
 .sync-note strong{color:var(--text-primary)}
+.conflicts-box{margin:10px 0 14px;padding:12px 14px;background:var(--bg-card);border-radius:var(--radius);border:1px solid var(--border-color);border-left:4px solid var(--warning)}
+.conflicts-head{font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:4px}
+.conflicts-hint{font-size:12px;color:var(--text-secondary);line-height:1.5;margin-bottom:6px}
+.conflict-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:9px 0 3px;border-top:1px solid var(--border-color);margin-top:6px}
+.conflict-info{flex:1 1 220px;min-width:0}
+.conflict-file{font-size:13px;font-weight:500;color:var(--text-primary);word-break:break-all}
+.conflict-meta{font-size:12px;color:var(--text-secondary);margin-top:2px}
+.conflict-actions{display:flex;gap:8px;flex-shrink:0}
+.conflict-actions .btn{padding:6px 14px;font-size:12px;width:auto}
+.tab-badge{display:inline-block;min-width:18px;padding:0 5px;margin-left:5px;border-radius:9px;background:var(--warning);color:#1A2634;font-size:11px;font-weight:700;line-height:18px;text-align:center;vertical-align:1px}
 
 /* ========== УСТРОЙСТВО ========== */
 .device{font-size:11px;color:var(--text-muted);margin-top:2px;text-align:center;line-height:1.4}
@@ -7801,7 +9366,7 @@ body::after {
       <div class="value" id="sysSaves">-</div>
     </div>
     <div class="status-item">
-      <div class="label"><svg width="17" height="12" viewBox="-192 -123 1664 1068" style="vertical-align:0px;margin-right:3px"><g transform="translate(0,822) scale(0.1,-0.1)" fill="currentColor"><path d="M7121 8205 c-484 -56 -926 -221 -1315 -494 -238 -166 -476 -397 -637 -618 -23 -32 -44 -60 -45 -62 -2 -2 -40 8 -84 23 -117 38 -260 73 -385 92 -150 23 -442 23 -590 0 -611 -94 -1127 -423 -1468 -934 -235 -353 -362 -809 -344 -1229 l6 -132 -32 -5 c-18 -3 -72 -10 -122 -16 -413 -50 -861 -242 -1201 -515 -434 -349 -738 -846 -852 -1395 -38 -183 -47 -272 -46 -495 0 -243 14 -368 63 -571 221 -899 936 -1599 1835 -1794 268 -58 -2 -55 4336 -55 3806 0 4011 1 4125 18 649 97 1197 373 1635 824 142 145 217 237 324 396 233 346 381 728 448 1162 18 116 22 183 22 395 0 282 -16 420 -74 657 -180 738 -643 1363 -1298 1752 -333 198 -715 326 -1104 371 -117 14 -118 14 -118 89 0 95 -59 403 -107 556 -75 243 -205 524 -331 715 -452 687 -1140 1129 -1947 1250 -185 28 -520 35 -694 15z"/></g></svg>Облако</div>
+      <div class="label"><svg width="17" height="12" viewBox="-192 -123 1664 1068" style="vertical-align:0px;margin-right:3px"><g transform="translate(0,822) scale(0.1,-0.1)" fill="currentColor"><path d="M7121 8205 c-484 -56 -926 -221 -1315 -494 -238 -166 -476 -397 -637 -618 -23 -32 -44 -60 -45 -62 -2 -2 -40 8 -84 23 -117 38 -260 73 -385 92 -150 23 -442 23 -590 0 -611 -94 -1127 -423 -1468 -934 -235 -353 -362 -809 -344 -1229 l6 -132 -32 -5 c-18 -3 -72 -10 -122 -16 -413 -50 -861 -242 -1201 -515 -434 -349 -738 -846 -852 -1395 -38 -183 -47 -272 -46 -495 0 -243 14 -368 63 -571 221 -899 936 -1599 1835 -1794 268 -58 -2 -55 4336 -55 3806 0 4011 1 4125 18 649 97 1197 373 1635 824 142 145 217 237 324 396 233 346 381 728 448 1162 18 116 22 183 22 395 0 282 -16 420 -74 657 -180 738 -643 1363 -1298 1752 -333 198 -715 326 -1104 371 -117 14 -118 14 -118 89 0 95 -59 403 -107 556 -75 243 -205 524 -331 715 -452 687 -1140 1129 -1947 1250 -185 28 -520 35 -694 15z"/></g></svg><span id="sysCloudLabel">Облако</span></div>
       <div class="value" id="sysCloud">-</div>
     </div>
     <div class="status-item">
@@ -7820,9 +9385,8 @@ body::after {
 
   <!-- ВКЛАДКИ -->
   <div class="tabs">
-    <button class="tab active" data-tab="saves"><svg width="16" height="16" viewBox="-6 -6 36 36" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M19,0H1C0.448,0,0,0.448,0,1v22c0,0.552,0.448,1,1,1h22c0.552,0,1-0.448,1-1V5L19,0z M6,3c0-0.552,0.448-1,1-1h10 c0.552,0,1,0.448,1,1v6c0,0.552-0.448,1-1,1H7c-0.552,0-1-0.448-1-1V3z M20,22H4v-7c0-0.552,0.448-1,1-1h14c0.552,0,1,0.448,1,1V22 z" fill="currentColor"/><path d="M16,9h-4V3h4V9z" fill="currentColor"/></svg>Сохранения</button>
+    <button class="tab active" data-tab="saves"><svg width="16" height="16" viewBox="-6 -6 36 36" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M19,0H1C0.448,0,0,0.448,0,1v22c0,0.552,0.448,1,1,1h22c0.552,0,1-0.448,1-1V5L19,0z M6,3c0-0.552,0.448-1,1-1h10 c0.552,0,1,0.448,1,1v6c0,0.552-0.448,1-1,1H7c-0.552,0-1-0.448-1-1V3z M20,22H4v-7c0-0.552,0.448-1,1-1h14c0.552,0,1,0.448,1,1V22 z" fill="currentColor"/><path d="M16,9h-4V3h4V9z" fill="currentColor"/></svg>Сохранения<span id="conflictsBadge" class="tab-badge" style="display:none" title="Есть конфликты сохранений"></span></button>
     <button class="tab" data-tab="roms"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" fill="currentColor"/></svg>Ромы</button>
-    <button class="tab" data-tab="stats"><svg width="13" height="13" viewBox="-312 -312 3120 3120" style="vertical-align:-2px;margin-right:4px"><g transform="translate(0,2496) scale(0.1,-0.1)" fill="currentColor"><path d="M9350 12533 c0 -6836 3 -12452 6 -12480 l7 -53 3153 0 3154 0 0 4408 c0 2425 -3 8041 -7 12480 l-6 8072 -3154 0 -3153 0 0 -12427z"/><path d="M521 15176 c-9 -10 -10 -1883 -5 -7595 l7 -7581 3154 0 3153 0 0 7583 c0 5885 -3 7586 -12 7595 -9 9 -722 12 -3149 12 -2662 0 -3138 -2 -3148 -14z"/><path d="M19945 7610 l-1750 -5 -3 -3803 -2 -3802 3162 0 3161 0 -6 3802 c-6 3005 -10 3804 -20 3810 -12 8 -1345 7 -4542 -2z"/></g></svg>Статистика</button>
     <button class="tab" data-tab="settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>Настройки</button>
 </div>
 
@@ -7850,6 +9414,13 @@ body::after {
 </div>
 
     <!-- ОБЩАЯ ПОДПИСЬ -->
+<!-- КОНФЛИКТЫ СОХРАНЕНИЙ / SAVE CONFLICTS (shown only when there are copies) -->
+<div id="conflictsBox" class="conflicts-box" style="display:none">
+    <div class="conflicts-head"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px;color:var(--warning)"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" fill="currentColor"/></svg><span id="conflictsHead"></span></div>
+    <div class="conflicts-hint" id="conflictsHint"></div>
+    <div id="conflictsList"></div>
+</div>
+
     <div class="sync-note">
         <p><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" fill="currentColor"/></svg><strong>ВАЖНО:</strong></p>
         <p>• <strong>Загрузка:</strong> Это действие ЗАГРУЗИТ сохранения из облака на устройство. Скачиваются только сохранения, изменённые на других устройствах. Если сохранение удалили на другом устройстве — оно удаляется и здесь. Изменённые на этом устройстве сохранения не заменяются, а отправляются в облако. Если сохранение изменили и здесь, и на другом устройстве — остаётся более новое. Если облако пустое, сохранения с устройства копируются в облако.</p>
@@ -7872,6 +9443,7 @@ body::after {
         <button class="btn btn-primary" onclick="runSyncWithProgress('roms_download')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="currentColor"/></svg>Загрузить ромы</button>
         <button class="btn btn-primary" onclick="runSyncWithProgress('roms_upload')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z" fill="currentColor"/></svg>Выгрузить ромы</button>
     </div>
+    <div id="romsStats" class="roms-stats" title="Статистика загрузки и выгрузки ромов"></div>
     
 <!-- ПРОГРЕСС-БАР РОМОВ -->
 <div id="syncProgressRoms" style="display:none;margin:10px 0;padding:12px;background:var(--bg-card);border-radius:8px;border:1px solid var(--border-color)">
@@ -7971,7 +9543,7 @@ body::after {
         <option value="30">30 дней</option>
       </select>
     </div>
-    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px">Если одно и то же сохранение изменили на разных устройствах, остаётся самая новая версия, а более старая хранится в облаке в папке GameSaves_conflicts выбранное время.</div>
+    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px">Если одно и то же сохранение изменили на разных устройствах, остаётся самая новая версия, а более старая хранится в облаке в папке GameSaves_conflicts выбранное время - вернуть её можно во вкладке «Сохранения». При «Не хранить» это устройство не делает копий и не удаляет копии других устройств.</div>
     <div class="settings-row">
       <label>Уведомления на экране:</label>
       <select id="settingNotifications">
@@ -7979,62 +9551,25 @@ body::after {
         <option value="false">Выключены</option>
       </select>
     </div>
-    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px">После синхронизации на экране появляется короткое сообщение о полученных, отправленных сохранениях или ошибке. Работает на Batocera и KNULLI.</div>
+    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px">Короткие уведомления о синхронизации и загрузках. Работает на Batocera и KNULLI.</div>
     <div class="settings-row">
-      <label>Логирование:</label>
-      <select id="settingLogEnabled">
-        <option value="true">Включено</option>
-        <option value="false">Выключено</option>
+      <label>Синхронизация после игры:</label>
+      <select id="settingSyncMode">
+        <option value="economy">Только при изменениях</option>
+        <option value="fast">После каждой игры</option>
+        <option value="full">Полная</option>
       </select>
     </div>
-    <!-- div class="settings-row">
-      <label>Уровень логов:</label>
+    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px"><b>Только при изменениях:</b> если сохранения на устройстве менялись - синхронизация как в режиме «После каждой игры»; если не менялись, облако не запрашивается, а изменения с других устройств придут при включении устройства или после игры, в которой сохранения изменятся.<br><b>После каждой игры:</b> отправляются и загружаются изменения и удаления, без полного списка файлов в облаке. Подходит для игры на нескольких устройствах.<br><b>Полная:</b> после каждой игры сверяется весь список файлов в облаке, включая добавленные в облако вручную. Самая медленная.<br>При включении устройства и ручном запуске синхронизация всегда полная.</div>
+    <div class="settings-row">
+      <label>Режим лога:</label>
       <select id="settingLogLevel">
-        <option value="info">Info</option>
-        <option value="debug">Debug</option>
-        <option value="error">Error</option>
+        <option value="info">Обычный</option>
+        <option value="debug">Подробный (debug)</option>
       </select>
-    </div -->
-    <div class="settings-row">
-      <label>Макс. размер лога:</label>
-      <input type="number" id="settingLogSize" value="102400" step="1024">
-      <span style="color:var(--text-secondary);font-size:12px">байт</span>
     </div>
+    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px"><b>Обычный:</b> записываются результаты синхронизаций (по ним строится статистика).<br><b>Подробный (debug):</b> дополнительно отправленные, полученные и переименованные файлы, время каждого этапа и запросов к облаку. Включайте, когда ищете причину медленной синхронизации.</div>
     <button class="btn btn-primary" onclick="saveSettings()">Сохранить настройки</button>
-  </div>
-
-  <!-- ВКЛАДКА: СТАТИСТИКА -->
-  <div id="tab-stats" class="tab-content">
-    <div class="stats-group-label"><svg width="14" height="14" viewBox="-6 -6 36 36" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M19,0H1C0.448,0,0,0.448,0,1v22c0,0.552,0.448,1,1,1h22c0.552,0,1-0.448,1-1V5L19,0z M6,3c0-0.552,0.448-1,1-1h10 c0.552,0,1,0.448,1,1v6c0,0.552-0.448,1-1,1H7c-0.552,0-1-0.448-1-1V3z M20,22H4v-7c0-0.552,0.448-1,1-1h14c0.552,0,1,0.448,1,1V22 z" fill="currentColor"/><path d="M16,9h-4V3h4V9z" fill="currentColor"/></svg>Сохранения</div>
-    <div class="stats-grid" id="statsGridSaves">
-      <div class="stats-item" title="Успешные синхронизации: всё уже совпадало, передавать было нечего">
-        <div class="num" id="statSyncUnchanged">0</div>
-        <div class="label">Без изменений</div>
-      </div>
-      <div class="stats-item" title="Успешные синхронизации, в которых что-то передано или удалено">
-        <div class="num ok" id="statSyncChanged">0</div>
-        <div class="label">С изменениями</div>
-      </div>
-      <div class="stats-item" title="Синхронизации с ошибкой">
-        <div class="num error" id="statSyncError">0</div>
-        <div class="label">Ошибок</div>
-      </div>
-    </div>
-    <div class="stats-group-label"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" fill="currentColor"/></svg>Ромы</div>
-    <div class="stats-grid" id="statsGridRoms">
-      <div class="stats-item">
-        <div class="num" id="statRomsTotal">0</div>
-        <div class="label">Всего ромов</div>
-      </div>
-      <div class="stats-item">
-        <div class="num ok" id="statRomsOk">0</div>
-        <div class="label">Ромов успешно</div>
-      </div>
-      <div class="stats-item">
-        <div class="num error" id="statRomsError">0</div>
-        <div class="label">Ромов ошибок</div>
-      </div>
-    </div>
   </div>
 
   <!-- ЛОГИ -->
@@ -8055,12 +9590,26 @@ body::after {
 <script>
 const API = '/api';
 
+// a browser reports a device that is off or out of reach as "Failed to fetch" (Chrome),
+// "NetworkError..." (Firefox) or "Load failed" (Safari) - shown in plain words instead
+const NET_ERR = 'Нет связи с устройством';
+function netErr(e) {
+  const m = (e && e.message) || String(e || '');
+  if ((e && e.name === 'TypeError') || /Failed to fetch|NetworkError|Load failed|network/i.test(m)) return NET_ERR;
+  return 'Ошибка: ' + m;
+}
+
 async function apiFetch(endpoint, options = {}) {
+  let res;
   try {
-    const res = await fetch(API + endpoint, options);
+    res = await fetch(API + endpoint, options);
+  } catch (e) {
+    return { success: false, error: NET_ERR };
+  }
+  try {
     return await res.json();
   } catch (e) {
-    return { success: false, error: e.message };
+    return { success: false, error: 'Устройство ответило ошибкой (код {c})'.replace('{c}', res.status) };
   }
 }
 
@@ -8166,15 +9715,15 @@ function updateProgressBar(data, target) {
         const pct = Math.min(100, Math.max(0, data.percent));
         barEl.style.animation = 'none';
         barEl.style.width = pct + '%';
-        let label = pct + '%';
+        let label = (data.stage ? data.stage + ' · ' : '') + pct + '%';
         if (data.speed > 0) label += ' · ' + formatBytes(data.speed) + '/с';
         if (data.eta > 0) label += ' · осталось ' + Math.round(data.eta) + ' сек';
-        if (data.totalTransfers > 0) label += ' · ' + (data.transfers || 0) + '/' + data.totalTransfers + ' файлов';
+        if (data.totalTransfers > 0 && !data.stage) label += ' · ' + (data.transfers || 0) + '/' + data.totalTransfers + ' файлов';
         percentEl.textContent = label;
     } else {
         barEl.style.animation = 'syncProgressMove 1.4s ease-in-out infinite';
         barEl.style.width = '35%';
-        percentEl.textContent = 'Идёт передача';
+        percentEl.textContent = data.stage || 'Идёт передача';
     }
 }
 
@@ -8192,7 +9741,8 @@ async function runSyncWithProgress(action, starter) {
         'upload': 'Выгрузка сохранений',
         'full': 'Полная синхронизация',
         'roms_download': 'Загрузка ромов',
-        'roms_upload': 'Выгрузка ромов'
+        'roms_upload': 'Выгрузка ромов',
+        'conflict_restore': 'Возврат версии'
     };
 
     // Определяем target один раз
@@ -8256,6 +9806,7 @@ async function runSyncWithProgress(action, starter) {
                     refreshStatus();
                     refreshLogs();
                     refreshStats();
+                    if (target === 'saves') loadConflicts();
                     setButtonsDisabled(false);
                 }, 2000);
                 return;
@@ -8298,7 +9849,7 @@ async function runSyncWithProgress(action, starter) {
     } catch (e) {
         stopPolling();
         showProgress(true, '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" fill="currentColor"/></svg> Ошибка: ' + e.message, target);
-        showToast('Ошибка: ' + e.message, 'error');
+        showToast(netErr(e), 'error');
         setTimeout(() => { showProgress(false); setButtonsDisabled(false); }, 3000);
     }
 }
@@ -8344,7 +9895,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     this.classList.add('active');
     document.getElementById('tab-' + this.dataset.tab).classList.add('active');
     if (this.dataset.tab === 'roms' || this.dataset.tab === 'saves') loadSystems();
-    if (this.dataset.tab === 'stats') refreshStats();
+    if (this.dataset.tab === 'roms') refreshStats();
   });
 });
 
@@ -8364,11 +9915,17 @@ async function refreshStatus() {
     document.getElementById('sysSaves').textContent = savesCount + ' файл., ' + savesSize;
     
     const cloudEl = document.getElementById('sysCloud');
-    if (data.cloud?.status === 'connected') {
-      cloudEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="currentColor"/></svg> ' + (data.cloud.free || '0');
+    // the card is titled with the cloud service in use (Yandex Disk, pCloud...)
+    document.getElementById('sysCloudLabel').textContent = data.cloud?.service || 'Облако';
+    if (data.cloud?.status === 'connected' && data.cloud.slow) {
+      // the cloud answers, but slowly - that explains a long sync
+      cloudEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" fill="currentColor"/></svg> медленно (' + data.cloud.slow + ' с)';
+      cloudEl.className = 'value warning';
+    } else if (data.cloud?.status === 'connected') {
+      cloudEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="currentColor"/></svg> ' + ((data.cloud.free && data.cloud.free !== '0') ? data.cloud.free : 'подключено');
       cloudEl.className = 'value ok';
     } else {
-      cloudEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" fill="currentColor"/></svg> Не подключено';
+      cloudEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" fill="currentColor"/></svg> ' + (data.internet ? 'не отвечает' : 'нет интернета');
       cloudEl.className = 'value error';
     }
     
@@ -8426,11 +9983,9 @@ async function loadSettings() {
       const kd = data.config.CONFLICT_KEEP_DAYS;
       document.getElementById('settingKeepDays').value = (kd === undefined || kd === '') ? '3' : String(kd);
       document.getElementById('settingNotifications').value = data.config.NOTIFICATIONS || 'true';
-      document.getElementById('settingLogEnabled').value = data.config.LOG_ENABLED || 'true';
-      // the log level field is hidden in the markup - skip it if absent
-      const logLevelEl = document.getElementById('settingLogLevel');
-      if (logLevelEl) logLevelEl.value = data.config.LOG_LEVEL || 'info';
-      document.getElementById('settingLogSize').value = data.config.MAX_LOG_SIZE || 102400;
+      document.getElementById('settingSyncMode').value = ['full', 'fast', 'economy'].includes(data.config.SYNC_MODE)
+        ? data.config.SYNC_MODE : (data.config.SKIP_UNCHANGED === 'false' ? 'full' : 'economy');
+      document.getElementById('settingLogLevel').value = data.config.LOG_LEVEL === 'debug' ? 'debug' : 'info';
     }
   } catch (e) {
     console.error('Load settings error:', e);
@@ -8482,7 +10037,7 @@ async function clearLogs() {
     showToast('Лог очищен');
     refreshLogs();
   } catch (e) {
-    showToast('Ошибка: ' + e.message, 'error');
+    showToast(netErr(e), 'error');
   }
 }
 
@@ -8526,35 +10081,13 @@ async function saveRomsSelectionSilent() {
     });
     
     try {
-        await apiFetch('/roms', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({action: 'select', systems: selected})
-        });
-        refreshStatus();
-    } catch (e) {
-        console.error('Save error:', e);
-    }
-}
-
-async function saveRomsSelectionSilent() {
-    const selected = [];
-    document.querySelectorAll('#romsList input[type="checkbox"]:checked').forEach(cb => {
-        const item = cb.closest('.system-item');
-        if (item) {
-            const name = item.querySelector('.name')?.textContent;
-            if (name) selected.push(name);
-        }
-    });
-    
-    try {
         const res = await apiFetch('/roms', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({action: 'select', systems: selected})
         });
         if (res.success && res.message) {
-            showToast(res.message, 'success');  // ← ЭТУ СТРОКУ ДОБАВИТЬ
+            showToast(res.message, 'success');
         }
         refreshStatus();
     } catch (e) {
@@ -8602,7 +10135,7 @@ async function toggleMedia() {
       showToast((res.error || 'Ошибка'), 'error');
     }
   } catch (e) {
-    showToast('Ошибка: ' + e.message, 'error');
+    showToast(netErr(e), 'error');
   }
 }
 
@@ -8681,7 +10214,7 @@ async function excludeAction(action, system) {
       showToast((res.error || 'Ошибка'), 'error');
     }
   } catch (e) {
-    showToast('Ошибка: ' + e.message, 'error');
+    showToast(netErr(e), 'error');
   }
 }
 
@@ -8697,9 +10230,9 @@ async function saveSettings() {
     MAX_RETRIES: parseInt(document.getElementById('settingRetries').value) || 3,
     CONFLICT_KEEP_DAYS: parseInt(document.getElementById('settingKeepDays').value) || 0,
     NOTIFICATIONS: document.getElementById('settingNotifications').value,
-    LOG_ENABLED: document.getElementById('settingLogEnabled').value,
-    // LOG_LEVEL: document.getElementById('settingLogLevel').value,  // ← ЗАКОММЕНТИРОВАТЬ ИЛИ УДАЛИТЬ
-    MAX_LOG_SIZE: parseInt(document.getElementById('settingLogSize').value) || 102400
+    SYNC_MODE: document.getElementById('settingSyncMode').value,
+    LOG_ENABLED: 'true',
+    LOG_LEVEL: document.getElementById('settingLogLevel').value
   };
   
   try {
@@ -8715,22 +10248,23 @@ async function saveSettings() {
       showToast((res.error || 'Ошибка'), 'error');
     }
   } catch (e) {
-    showToast('Ошибка: ' + e.message, 'error');
+    showToast(netErr(e), 'error');
   }
 }
 
 // ========== СТАТИСТИКА ==========
 
 async function refreshStats() {
+  // the save statistics are in the status bar at the top; the ROM ones are one line in the ROMs tab
   try {
     const data = await apiFetch('/stats');
-    if (data) {
-      document.getElementById('statSyncUnchanged').textContent = data.sync?.unchanged || 0;
-      document.getElementById('statSyncChanged').textContent = data.sync?.changed || 0;
-      document.getElementById('statSyncError').textContent = data.sync?.error || 0;
-      document.getElementById('statRomsTotal').textContent = data.roms?.total || 0;
-      document.getElementById('statRomsOk').textContent = data.roms?.ok || 0;
-      document.getElementById('statRomsError').textContent = data.roms?.error || 0;
+    const el = document.getElementById('romsStats');
+    if (data && el) {
+      const total = data.roms?.total || 0, ok = data.roms?.ok || 0, err = data.roms?.error || 0;
+      el.innerHTML =
+        '<span class="chip">Операций <b>' + total + '</b></span>' +
+        '<span class="chip ok">Успешно <b>' + ok + '</b></span>' +
+        '<span class="chip' + (err > 0 ? ' err' : '') + '">Ошибок <b>' + err + '</b></span>';
     }
   } catch (e) {
     console.error('Stats error:', e);
@@ -8739,12 +10273,67 @@ async function refreshStats() {
 
 // ========== ЗАПУСК ==========
 
+// ========== SAVE CONFLICTS ==========
+const CONF_T = {"head": "Конфликты сохранений", "hint": "Эти сохранения изменились на двух устройствах. Синхронизация оставила более новую версию, а другую сохранила здесь. «Вернуть» сделает выбранную версию текущей на всех устройствах; текущая версия при этом тоже сохранится здесь.", "from": "версия с {dev}", "left": "хранится до {until}", "last": "удалится при следующей синхронизации", "notHere": "на этом устройстве этого файла нет", "notSynced": "эта система не синхронизируется на этом устройстве", "restore": "Вернуть", "del": "Удалить", "confirmRestore": "Вернуть версию {file} с {dev} ({time})?\\n\\nОна станет текущей на всех устройствах, а текущая версия сохранится в конфликтах.\\nЕсли эта игра сейчас запущена, сначала выйдите из неё.", "confirmDel": "Удалить копию {file} ({dev}, {time})?\\nВернуть её будет нельзя.", "phase": "Возврат версии", "deleted": "Копия удалена", "badge": "Есть конфликты сохранений"};
+
+async function loadConflicts() {
+  const box = document.getElementById('conflictsBox');
+  const badge = document.getElementById('conflictsBadge');
+  const res = await apiFetch('/conflicts');
+  if (!res.success) return;               // the cloud is not reachable: keep what is shown
+  const items = res.items || [];
+  badge.style.display = items.length ? '' : 'none';
+  badge.textContent = items.length;
+  if (!items.length) { box.style.display = 'none'; return; }
+  document.getElementById('conflictsHead').textContent = CONF_T.head + ' (' + items.length + ')';
+  document.getElementById('conflictsHint').textContent = CONF_T.hint;
+  window._conflicts = items;
+  document.getElementById('conflictsList').innerHTML = items.map((c, i) => {
+    const meta = [CONF_T.from.replace('{dev}', c.dev), c.time,
+                  c.until ? CONF_T.left.replace('{until}', c.until) : CONF_T.last];
+    if (!c.keep) meta.pop();           // this device does not remove copies: other devices decide
+    if (!c.synced) meta.push(CONF_T.notSynced);
+    else if (!c.here) meta.push(CONF_T.notHere);
+    return '<div class="conflict-row"><div class="conflict-info">' +
+      '<div class="conflict-file">' + escapeHtml(c.file) + '</div>' +
+      '<div class="conflict-meta">' + escapeHtml(meta.join(' · ')) + '</div></div>' +
+      '<div class="conflict-actions">' +
+      '<button class="btn btn-primary" onclick="conflictRestore(' + i + ')"' + (c.synced ? '' : ' disabled') + '>' + CONF_T.restore + '</button>' +
+      '<button class="btn btn-danger" onclick="conflictDelete(' + i + ')">' + CONF_T.del + '</button>' +
+      '</div></div>';
+  }).join('');
+  box.style.display = '';
+}
+
+function conflictText(tpl, c) {
+  return tpl.replace('{file}', c.file).replace('{dev}', c.dev).replace('{time}', c.time);
+}
+
+function conflictRestore(i) {
+  const c = (window._conflicts || [])[i];
+  if (!c || !confirm(conflictText(CONF_T.confirmRestore, c))) return;
+  runSyncWithProgress('conflict_restore', () => apiFetch('/conflicts/restore', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: c.id})
+  }));
+}
+
+async function conflictDelete(i) {
+  const c = (window._conflicts || [])[i];
+  if (!c || !confirm(conflictText(CONF_T.confirmDel, c))) return;
+  const res = await apiFetch('/conflicts/delete', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: c.id})
+  });
+  showToast(res.success ? CONF_T.deleted : (res.error || 'Error'), res.success ? 'success' : 'error');
+  loadConflicts();
+}
+
 loadTheme();
 loadSettings();        // загружаем настройки один раз при старте
 refreshStatus();
 refreshLogs();
 refreshStats();
 loadSystems();         // ЗАГРУЖАЕМ СИСТЕМЫ ПРИ СТАРТЕ
+loadConflicts();
 
 // Автообновление (настройки НЕ обновляются)
 // ========== DOWNLOAD FROM A PUBLIC LINK ==========
@@ -9052,7 +10641,7 @@ async function cancelOperation() {
     document.querySelectorAll('.op-cancel').forEach(b => { b.disabled = true; b.textContent = OP_T.cancelling; });
     const r = await apiFetch('/cancel', { method: 'POST' });
     if (!r.success) {
-        showToast(r.error || 'Error', 'error');
+        showToast(r.error || 'Ошибка', 'error');
         opCancelShow(true);
     }
 }
@@ -9071,7 +10660,6 @@ function opCancelled(target) {
 
 linkInit();
 setInterval(refreshStatus, 10000);
-setInterval(refreshLogs, 8000);
 setInterval(refreshStats, 10000);
 </script>
 </body>
@@ -9108,7 +10696,7 @@ if __name__ == "__main__":
     except:
         ip_addr = 'localhost'
     
-    print(f"\n✅ Save Sync Web UI v1.4.6 запущен")
+    print(f"\n✅ Save Sync Web UI v1.4.7 запущен")
     print(f"🌐 Откройте: http://{ip_addr}:{port}")
     print(f"⏹️  Ctrl+C для остановки\n")
     
@@ -9173,7 +10761,7 @@ if [ "$1" = "--info" ]; then
     
     echo ""
     echo "══════════════════════════════════════════════════════════"
-    echo " Save Sync Diagnostics v1.4.6"
+    echo " Save Sync Diagnostics v1.4.7"
     echo " Система: $SYSTEM"
     echo "══════════════════════════════════════════════════════════"
     echo ""
@@ -9246,12 +10834,13 @@ if [ "$1" = "--info" ]; then
     print_2col "Статус" "$CLOUD_STATUS"
     
     # Использование облака
-    CLOUD_USED=$("$RCLONE_PATH" --config "$RCLONE_CONF" about "$REMOTE_NAME:" 2>/dev/null | grep -i "used" | awk '{print $2, $3}')
-    CLOUD_TOTAL=$("$RCLONE_PATH" --config "$RCLONE_CONF" about "$REMOTE_NAME:" 2>/dev/null | grep -i "total" | awk '{print $2, $3}')
-    CLOUD_FREE=$("$RCLONE_PATH" --config "$RCLONE_CONF" about "$REMOTE_NAME:" 2>/dev/null | grep -i "free" | awk '{print $2, $3}')
-    print_2col "Использовано" "${CLOUD_USED:-неизвестно}"
-    print_2col "Всего" "${CLOUD_TOTAL:-неизвестно}"
-    print_2col "Свободно" "${CLOUD_FREE:-неизвестно}"
+    CLOUD_ABOUT=$(cloud_about)
+    CLOUD_USED=$(printf '%s\n' "$CLOUD_ABOUT" | grep -i "^used" | awk '{print $2, $3}')
+    CLOUD_TOTAL=$(printf '%s\n' "$CLOUD_ABOUT" | grep -i "^total" | awk '{print $2, $3}')
+    CLOUD_FREE=$(printf '%s\n' "$CLOUD_ABOUT" | grep -i "^free" | awk '{print $2, $3}')
+    print_2col "Использовано" "${CLOUD_USED:-$(cloud_free_unknown)}"
+    print_2col "Всего" "${CLOUD_TOTAL:-$(cloud_free_unknown)}"
+    print_2col "Свободно" "${CLOUD_FREE:-$(cloud_free_unknown)}"
     
     # Последняя синхронизация
     if [ -f "$STATUS_FILE" ]; then
@@ -9371,13 +10960,13 @@ fi
 # Автозагрузка сохранений
 AUTOLOAD_FOUND=false
 if [ -f "$BASE/custom.sh" ]; then
-    if grep -q "download_sync.sh" "$BASE/custom.sh" 2>/dev/null || grep -q "download_saves.sh" "$BASE/custom.sh" 2>/dev/null; then
+    if grep -q "download_sync.sh" "$BASE/custom.sh" 2>/dev/null; then
         print_2col "Автозагрузка" "✅ настроен (custom.sh)"
         AUTOLOAD_FOUND=true
     fi
 fi
 if [ -f "$BASE/services/custom_service" ]; then
-    if grep -q "download_sync.sh" "$BASE/services/custom_service" 2>/dev/null || grep -q "download_saves.sh" "$BASE/services/custom_service" 2>/dev/null; then
+    if grep -q "download_sync.sh" "$BASE/services/custom_service" 2>/dev/null; then
         if [ "$AUTOLOAD_FOUND" = false ]; then
             print_2col "Автозагрузка" "✅ настроен (custom_service)"
             AUTOLOAD_FOUND=true
@@ -9423,6 +11012,7 @@ echo ""
         print_2col "Попытки" "$MAX_RETRIES"
         print_2col "Копии при конфликтах" "$(keep_days_label)"
         print_2col "Уведомления" "$(notify_label)"
+        print_2col "После игры" "$(sync_mode_label)"
         print_2col "Исключения" "${EXCLUDED_SYSTEMS:-нет}"
     else
         print_2col "Главный конфиг" "❌ не найден"
@@ -9505,13 +11095,13 @@ fi
 # Проверка: уже установлен?
 ############################################
 
-if [ -f "$RCLONE_CONF" ] && { [ -f "$DOWNLOAD_SCRIPT" ] || [ -f "$BASE/download_saves.sh" ]; } && { [ -f "$UPLOAD_SCRIPT" ] || [ -f "$BASE/upload_saves.sh" ]; }; then
+if [ -f "$RCLONE_CONF" ] && [ -f "$DOWNLOAD_SCRIPT" ] && [ -f "$UPLOAD_SCRIPT" ]; then
     echo ""
     echo "══════════════════════════════════════════════════════════"
     echo " Save Sync уже установлен ($SYSTEM)"
     echo "══════════════════════════════════════════════════════════"
     echo ""
-    echo " 1 - Обновить до v1.4.6"
+    echo " 1 - Обновить до v1.4.7"
     echo " 2 - Переустановить заново"
     echo " 3 - Выход"
     echo ""
@@ -9520,21 +11110,10 @@ if [ -f "$RCLONE_CONF" ] && { [ -f "$DOWNLOAD_SCRIPT" ] || [ -f "$BASE/download_
     1)
         echo ""
         echo "══════════════════════════════════════════════════════════"
-        echo " 📦 Обновление до v1.4.6"
+        echo " 📦 Обновление до v1.4.7"
         echo "══════════════════════════════════════════════════════════"
         echo ""
-        
-        echo "🗑️ Удаление старых файлов (v1.2)..."
-        
-        if [ -f "$BASE/download_saves.sh" ]; then
-            rm -f "$BASE/download_saves.sh"
-            echo "✅ Удален download_saves.sh"
-        fi
-        if [ -f "$BASE/upload_saves.sh" ]; then
-            rm -f "$BASE/upload_saves.sh"
-            echo "✅ Удален upload_saves.sh"
-        fi
-        
+
         if [ ! -f "$CONFIG_FILE" ]; then
             create_default_config
             echo "✅ Создан sync.conf"
@@ -9572,14 +11151,6 @@ if [ -f "$RCLONE_CONF" ] && { [ -f "$DOWNLOAD_SCRIPT" ] || [ -f "$BASE/download_
                 ;;
         esac
         
-        # Обновляем ссылку на download_sync.sh если была старая
-        if [ -f "$AUTOLOAD_FILE" ]; then
-            if grep -q "download_saves.sh" "$AUTOLOAD_FILE" 2>/dev/null; then
-                sed -i "s|download_saves.sh|download_sync.sh|g" "$AUTOLOAD_FILE"
-                echo "✅ Ссылка в $(basename $AUTOLOAD_FILE) обновлена"
-            fi
-        fi
-        
         # Создаём файл если его нет
         if [ ! -f "$AUTOLOAD_FILE" ]; then
             echo '#!/bin/bash' > "$AUTOLOAD_FILE"
@@ -9590,10 +11161,19 @@ if [ -f "$RCLONE_CONF" ] && { [ -f "$DOWNLOAD_SCRIPT" ] || [ -f "$BASE/download_
         # Добавляем download_sync.sh если нет (путь берём из $DOWNLOAD_SCRIPT,
         # чтобы корректно работало на Recalbox, а не только на Batocera/KNULLI)
         if ! grep -q "download_sync.sh" "$AUTOLOAD_FILE" 2>/dev/null; then
-            sed -i "/^#!/a bash $DOWNLOAD_SCRIPT &" "$AUTOLOAD_FILE"
+            sed -i "/^#!/a [ \"\$1\" = \"stop\" ] || bash $DOWNLOAD_SCRIPT \&" "$AUTOLOAD_FILE"
             echo "✅ Загрузка сохранений добавлена в $(basename $AUTOLOAD_FILE)"
         fi
         
+        # Строки автозапуска из старых версий срабатывали и при выключении:
+        # система вызывает этот файл с "start" при включении и с "stop" при выключении.
+        # оба файла автозапуска (на KNULLI бывают оба), и старый формат строк без bash
+        for AF in "$BASE/custom.sh" "$BASE/services/custom_service"; do
+            [ -f "$AF" ] || continue
+            sed -i -e 's#^\([[:space:]]*\)\(bash \)\{0,1\}\(/[^ ]*download_sync\.sh\) &$#\1[ "$1" = "stop" ] || \2\3 \&#' \
+                   -e 's#^\([[:space:]]*\)\(bash \)\{0,1\}\(/[^ ]*install_sync\.sh --web\) &$#\1[ "$1" = "stop" ] || \2\3 \&#' "$AF" 2>/dev/null
+        done
+
         # Добавляем веб-интерфейс если нет
         if ! grep -q "install_sync.sh --web" "$AUTOLOAD_FILE" 2>/dev/null; then
             cat >> "$AUTOLOAD_FILE" << EOF
@@ -9607,16 +11187,16 @@ if [ -f "$RCLONE_CONF" ] && { [ -f "$DOWNLOAD_SCRIPT" ] || [ -f "$BASE/download_
         fi
         sleep 2
     done
-    bash $BASE/install_sync.sh --web &
+    [ "\$1" = "stop" ] || bash $BASE/install_sync.sh --web &
 ) &
 EOF
             echo "✅ Веб-интерфейс добавлен в $(basename $AUTOLOAD_FILE)"
         fi
         
         echo ""
-        echo "✅ Обновление до v1.4.6 завершено!"
+        echo "✅ Обновление до v1.4.7 завершено!"
 
-        log_msg "Обновление до v1.4.6 завершено"
+        log_msg "Обновление до v1.4.7 завершено"
 
         restart_web_after_update
 
@@ -9668,7 +11248,6 @@ EOF
         # Переустановка - удаляем и устанавливаем заново
         echo "🗑️ Удаление старых файлов..."
         rm -f "$DOWNLOAD_SCRIPT" "$UPLOAD_SCRIPT" "$DOWNLOAD_ROMS" "$UPLOAD_ROMS" "$LINK_SCRIPT" 2>/dev/null
-        rm -f "$BASE/download_saves.sh" "$BASE/upload_saves.sh" 2>/dev/null
         rm -f "$SCRIPT_DIR/save-sync.sh" 2>/dev/null
         rm -f "/recalbox/share/userscripts/save-sync[endgame].sh" 2>/dev/null
         echo "✅ Старые файлы удалены"
@@ -9693,7 +11272,7 @@ fi
 
 echo ""
 echo "══════════════════════════════════════════════════════════"
-echo " Save Sync v1.4.6 - Установка"
+echo " Save Sync v1.4.7 - Установка"
 echo " $SYSTEM"
 echo "══════════════════════════════════════════════════════════"
 echo ""
@@ -9731,99 +11310,14 @@ else
     fi
 fi
 
-echo ""
-echo "Выберите облачный сервис"
-echo ""
-echo " 1 - Яндекс.Диск"
-echo " 2 - Облако Mail.ru"
-echo " 3 - pCloud"
-echo " 4 - Koofr"
-echo " 5 - Nextcloud / OwnCloud / другой WebDAV-сервер"
-echo " 6 - Fastmail Files"
-echo " 7 - Mega"
-echo ""
-
-read -p "Введите номер (1-7): " CHOICE
-
-BACKEND_TYPE="webdav"
-
-case "$CHOICE" in
-1) URL="https://webdav.yandex.ru"; VENDOR="yandex" ;;
-2) URL="https://webdav.cloud.mail.ru"; VENDOR="other" ;;
-3) URL="https://webdav.pcloud.com"; VENDOR="other" ;;
-4) URL="https://app.koofr.net/dav/Koofr"; VENDOR="other" ;;
-5)
-    echo ""
-    read -p "Введите URL вашего WebDAV-сервера: " URL
-    echo ""
-    echo "Что именно вы используете?"
-    echo " 1 - Nextcloud"
-    echo " 2 - ownCloud"
-    echo " 3 - Другой WebDAV-сервер"
-    read -p "Введите номер (1-3): " NC_CHOICE
-    case "$NC_CHOICE" in
-        2) VENDOR="owncloud" ;;
-        3) VENDOR="other" ;;
-        *) VENDOR="nextcloud" ;;
-    esac
-    ;;
-6)
-    echo ""
-    echo "Для Fastmail: логин — это ваш email на Fastmail, пароль —"
-    echo "отдельный пароль приложения с доступом к Files (WebDAV),"
-    echo "создать можно в настройках аккаунта Fastmail."
-    URL="https://webdav.fastmail.com/"
-    VENDOR="fastmail"
-    ;;
-7)
-    echo ""
-    echo "Для Mega: логин — email вашего аккаунта, пароль — обычный"
-    echo "пароль от аккаунта."
-    echo ""
-    echo "⚠️  Если аккаунт Mega совсем новый - зайдите в него хотя бы"
-    echo "    один раз через обычный браузер перед этим шагом (Mega"
-    echo "    должна сгенерировать ключи шифрования на своей стороне,"
-    echo "    иначе подключение не сработает)."
-    BACKEND_TYPE="mega"
-    ;;
-*) echo "❌ Неверный выбор."; exit 1 ;;
-esac
-
-echo ""
-echo "Введите логин:"
-IFS= read -r YUSER
-echo ""
-echo "Введите пароль (или пароль приложения):"
-IFS= read -rs YPASS
-echo ""
-
-PASS=$("$RCLONE_PATH" obscure "$YPASS")
-
-if [ "$BACKEND_TYPE" = "mega" ]; then
-    cat > "$RCLONE_CONF" <<EOF
-[$REMOTE_NAME]
-type = mega
-user = $YUSER
-pass = $PASS
-EOF
-else
-    cat > "$RCLONE_CONF" <<EOF
-[$REMOTE_NAME]
-type = webdav
-url = $URL
-vendor = $VENDOR
-user = $YUSER
-pass = $PASS
-EOF
-fi
-
-chmod 600 "$RCLONE_CONF"
+ask_cloud_config "$RCLONE_CONF" || exit 1
 
 echo "Проверка подключения..."
-if "$RCLONE_PATH" --config "$RCLONE_CONF" lsd "$REMOTE_NAME:" >/dev/null 2>&1; then
+if cloud_check "$RCLONE_CONF"; then
     echo "✅ Подключение успешно."
 else
     echo "❌ Ошибка подключения."
+    [ -n "$CLOUD_ERR" ] && echo "   Причина: $CLOUD_ERR"
     exit 1
 fi
 
@@ -9873,10 +11367,19 @@ fi
 
 # Добавляем download_sync.sh если нет (путь берём из $DOWNLOAD_SCRIPT,
 # чтобы корректно работало на Recalbox, а не только на Batocera/KNULLI)
-if ! grep -q "download_sync.sh" "$AUTOLOAD_FILE" 2>/dev/null && ! grep -q "download_saves.sh" "$AUTOLOAD_FILE" 2>/dev/null; then
-    sed -i "/^#!/a bash $DOWNLOAD_SCRIPT &" "$AUTOLOAD_FILE"
+if ! grep -q "download_sync.sh" "$AUTOLOAD_FILE" 2>/dev/null; then
+    sed -i "/^#!/a [ \"\$1\" = \"stop\" ] || bash $DOWNLOAD_SCRIPT \&" "$AUTOLOAD_FILE"
     echo "✅ Загрузка сохранений добавлена в $(basename $AUTOLOAD_FILE)"
 fi
+
+# Строки автозапуска из старых версий срабатывали и при выключении:
+# система вызывает этот файл с "start" при включении и с "stop" при выключении.
+# оба файла автозапуска (на KNULLI бывают оба), и старый формат строк без bash
+for AF in "$BASE/custom.sh" "$BASE/services/custom_service"; do
+    [ -f "$AF" ] || continue
+    sed -i -e 's#^\([[:space:]]*\)\(bash \)\{0,1\}\(/[^ ]*download_sync\.sh\) &$#\1[ "$1" = "stop" ] || \2\3 \&#' \
+           -e 's#^\([[:space:]]*\)\(bash \)\{0,1\}\(/[^ ]*install_sync\.sh --web\) &$#\1[ "$1" = "stop" ] || \2\3 \&#' "$AF" 2>/dev/null
+done
 
 # Добавляем веб-интерфейс если нет
 if ! grep -q "install_sync.sh --web" "$AUTOLOAD_FILE" 2>/dev/null; then
@@ -9891,7 +11394,7 @@ if ! grep -q "install_sync.sh --web" "$AUTOLOAD_FILE" 2>/dev/null; then
         fi
         sleep 2
     done
-    bash $BASE/install_sync.sh --web &
+    [ "\$1" = "stop" ] || bash $BASE/install_sync.sh --web &
 ) &
 EOF
     echo "✅ Веб-интерфейс добавлен в $(basename $AUTOLOAD_FILE)"
@@ -9901,7 +11404,7 @@ fi
 
 SYSTEM_VERSION=$(get_system_version)
 
-log_msg "Save Sync v1.4.6 | $SYSTEM ($SYSTEM_VERSION) | rclone v${NEW_VER:-unknown}"
+log_msg "Save Sync v1.4.7 | $SYSTEM ($SYSTEM_VERSION) | rclone v${NEW_VER:-unknown}"
 log_msg "Установка завершена"
 
 echo ""

@@ -6,7 +6,7 @@
 
 <h1 align="center">Save Sync</h1>
 
-![Version](https://img.shields.io/badge/version-1.4.6-blue)
+![Version](https://img.shields.io/badge/version-1.4.7-blue)
 ![Platform](https://img.shields.io/badge/platform-Batocera%20%7C%20KNULLI%20%7C%20Recalbox-orange)
 
 **RU** · [English below ↓](#english)
@@ -30,7 +30,6 @@
 - Копирование и загрузка ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет локально
 - Загрузка ромов по публичной ссылке (Яндекс.Диск, pCloud, Nextcloud / ownCloud, archive.org) — сразу на устройство или в облако: можно выбрать отдельные файлы и папки, взять нужные игры из zip-архива, распаковать .zip / .7z / .rar
 - Не нужно постоянно включённое устройство: не требуется, чтобы оба девайса были онлайн одновременно, и не нужен отдельный сервер или NAS — только обычный облачный WebDAV-аккаунт
-- Показывает на экране короткое уведомление после синхронизации: что получено и отправлено, или ошибку. Работает на Batocera и KNULLI, на Recalbox уведомлений нет. Включается и выключается в центре управления и в веб-интерфейсе
 - Работает с любым числом устройств в любом сочетании систем
 
 ## Как работает синхронизация
@@ -45,11 +44,21 @@
 
 **Включили устройство** — забирает сохранения, изменённые на других устройствах. Если играли на другом, прогресс уже будет здесь.
 
-**Вышли из игры** — отправляет то, что изменилось на этом устройстве, и заодно забирает изменённое на других.
+**Вышли из игры** — отправляет то, что изменилось на этом устройстве, и забирает изменённое на других. Как именно — зависит от настройки «Синхронизация» (центр управления, пункт 9, или веб-интерфейс):
+
+| Режим | После игры |
+|---|---|
+| **Только при изменениях** (по умолчанию) | если сохранения на устройстве менялись — синхронизация как в режиме «После каждой игры»; если не менялись, облако не запрашивается, а изменения с других устройств придут при включении устройства или после игры, в которой сохранения изменятся |
+| **После каждой игры** | отправляются и загружаются изменения и удаления, без полного списка файлов в облаке. Подходит для игры на нескольких устройствах |
+| **Полная** | сверяется весь список файлов в облаке, включая добавленные в облако вручную. Самая медленная |
+
+При включении устройства и ручном запуске синхронизация всегда полная.
+
+**Переименовали сохранение** — например, эмулятор сдвинул слоты быстрых сохранений после удаления одного из них. Файл от 1 МБ переименовывается прямо в облаке, без повторной отправки.
 
 **Удалили сохранение** — при следующей синхронизации (например, при выходе из игры) оно удалится из облака, а на других устройствах — при их следующей синхронизации.
 
-**Одно и то же сохранение изменили на разных устройствах** — остаётся более новая версия, а более старую можно хранить копией в папке `GameSaves_conflicts` в облаке, с именем устройства и датой, например `snes/Zelda.srm.KNULLI-3f2a.2026-09-27_18-40-00`. Ничего спрашивать не будет, в лог попадёт строка о конфликте. Сколько дней хранить такие копии, задаётся в настройке «Копии при конфликтах» (веб-интерфейс или центр управления): по умолчанию 3 дня, 0 — не хранить. Срок считается с момента конфликта, а старые копии удаляет любое устройство при своей синхронизации.
+**Одно и то же сохранение изменили на разных устройствах** — остаётся более новая версия, а более старую можно хранить копией в папке `GameSaves_conflicts` в облаке, с именем устройства и датой, например `snes/Zelda.srm.KNULLI-3f2a.2026-09-27_18-40-00`. Во время синхронизации ничего не спрашивается: в лог попадёт строка о конфликте, на экране (Batocera и KNULLI) появится уведомление, а в веб-интерфейсе во вкладке «Сохранения» — блок «Конфликты сохранений», где другую версию можно вернуть или удалить. Сколько дней хранить такие копии, задаётся в настройке «Копии при конфликтах» (веб-интерфейс или центр управления): по умолчанию 3 дня, 0 — не хранить. Срок считается с момента конфликта, а старые копии удаляет при своей синхронизации любое устройство, где копии включены. Устройство с настройкой 0 копий не делает и чужие копии не трогает.
 
 **Какие сохранения синхронизируются** — только систем, в которые играют на этом устройстве: если для системы здесь есть ромы или её сохранения уже лежат на устройстве. Сохранения остальных систем остаются в облаке и сюда не скачиваются; появились ромы — система подключится при следующей синхронизации, и сохранения из облака придут первыми. Любую систему можно исключить вручную, а системы, у которых сохранения есть только в облаке, показываются в списке исключений с пометкой «только в облаке».
 
@@ -76,6 +85,13 @@
 - Mega
 
 Для Яндекса, Mail.ru и Fastmail нужен **пароль приложения**, а не обычный пароль от аккаунта — установщик подскажет, где его создать для выбранного сервиса.
+
+**Сменить облако** можно в любой момент без переустановки — пункт 16 «Сменить облако» в центре управления. Скрипт проверит подключение и предложит два варианта:
+
+- **Сделать облако копией этого устройства** — для первого устройства: сохранения в новом облаке станут такими же, как здесь
+- **Объединить сохранения с облаком** — для остальных устройств: чужие сохранения скачаются, свои загрузятся, ничего не удалится
+
+Старое облако при этом не меняется, а прежние настройки сохраняются в `rclone.conf.bak`.
 
 ## Установка
 
@@ -133,7 +149,9 @@ Recalbox:
 /recalbox/share/system/install_sync.sh --config
 ```
 
-Всё через меню: загрузка, выгрузка и полная синхронизация сохранений, исключение систем из синхронизации, копирование и загрузка ромов, загрузка по публичной ссылке, интервал синхронизации, количество попыток, копии при конфликтах, статистика и логи, полная диагностика, перезапуск веб-интерфейса.
+Всё через меню: загрузка, выгрузка и полная синхронизация сохранений, исключение систем из синхронизации, копирование и загрузка ромов, загрузка по публичной ссылке, интервал синхронизации, количество попыток, копии при конфликтах, режим синхронизации, статистика и логи, полная диагностика, уведомления на экране, смена облака, перезапуск веб-интерфейса.
+
+В шапке меню видно подключённое облако и его состояние: `✓ подключено`, `⚠ медленно (12 с)`, `✗ не отвечает` или `✗ нет интернета`.
 
 ## Веб-интерфейс
 
@@ -143,7 +161,11 @@ http://IP_АДРЕС_УСТРОЙСТВА:8080
 ```
 Дублирует все функции центра управления — синхронизацию, работу с ромами, загрузку по ссылке, исключения, живой прогресс, статистику, логи — из браузера любого устройства в той же сети. (Если не открывается сразу после установки — перезапустите через центр управления или перезагрузите устройство.)
 
-В статистике синхронизации делятся на три группы: без изменений, с изменениями и с ошибкой.
+Статистика сохранений — в верхней панели: синхронизации без изменений, с изменениями и с ошибкой. Статистика ромов — строкой во вкладке «Ромы».
+
+Карточка облака показывает подключённый сервис, свободное место и состояние: если облако отвечает медленно — `медленно (12 с)`, если не отвечает — `не отвечает`. Так сразу видно, где проблема, если синхронизация идёт долго.
+
+Веб-интерфейс принимает команды только со своей страницы: сторонний сайт, открытый в браузере, не сможет им управлять.
 
 ## Загрузка ромов по публичной ссылке
 
@@ -182,7 +204,7 @@ Recalbox:
 - `.sync_state`, `.sync_base.json` — состояние синхронизации (как выглядели сохранения при последней синхронизации)
 - `roms_filter_sync` — фильтр ромов
 - `bin/rclone` — сам rclone
-- `.config/rclone/rclone.conf` — конфиг облака
+- `.config/rclone/rclone.conf` — конфиг облака (`rclone.conf.bak` — прежний, после смены облака)
 - `logs/save_sync.log` — лог синхронизации
 
 Также добавляется хук выхода из игры (запускает выгрузку сохранений) и строка запуска в файл автозагрузки системы (`custom.sh` или `services/custom_service`).
@@ -225,13 +247,13 @@ sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 Только ненадолго — при включении устройства и при выходе из игры. Всё остальное время можно играть офлайн, сохранения синхронизируются при следующем подключении к сети.
 
 **Сколько времени занимает синхронизация?**
-Зависит от размера файлов и скорости интернета. Крупные сохранения (1–4 МБ) могут идти несколько минут. После игры с тяжёлыми сохранениями не выключайте устройство сразу — дайте немного времени. То же самое при загрузке: большие сохранения подтягиваются не мгновенно.
+Если сохранения не менялись — около секунды (в режиме «Только при изменениях» облако не запрашивается). Иначе зависит от размера файлов, скорости интернета и самого облака. Крупные сохранения (1–4 МБ) могут идти несколько минут. После игры с тяжёлыми сохранениями не выключайте устройство сразу — дайте немного времени. То же самое при загрузке: большие сохранения подтягиваются не мгновенно.
 
 **Что такое интервал синхронизации?**
 Минимальное время между синхронизациями. Например, если установить 5 минут, синхронизация при выходе из игры выполнится, только если с предыдущей прошло больше 5 минут — это помогает не перегружать облако при частых выходах из игры. Если играть на двух устройствах подряд, интервал может отложить отправку, и тогда вместо обычной синхронизации получится конфликт — он разрешается автоматически, остаётся более новая версия.
 
 **Что такое «Копии при конфликтах»?**
-Если одно и то же сохранение изменили на двух устройствах до синхронизации, остаётся более новая версия, а проигравшая может храниться в папке `GameSaves_conflicts` в облаке — на случай, если выбрана не та. Срок хранения (по умолчанию 3 дня, 0 — не хранить) настраивается в веб-интерфейсе или центре управления. Вернуть старую версию можно, скопировав файл из этой папки обратно в `GameSaves` и убрав из имени метку устройства и даты.
+Если одно и то же сохранение изменили на двух устройствах до синхронизации, остаётся более новая версия, а проигравшая может храниться в папке `GameSaves_conflicts` в облаке — на случай, если выбрана не та. Срок хранения (по умолчанию 3 дня, 0 — не хранить) настраивается в веб-интерфейсе или центре управления. Вернуть другую версию проще всего в веб-интерфейсе: вкладка «Сохранения» → «Конфликты сохранений» → «Вернуть». Выбранная версия станет текущей на всех устройствах, а текущая тоже сохранится в конфликтах, так что выбор можно отменить. Если игра запущена, сначала выйдите из неё.
 
 **Зачем исключать систему из синхронизации?**
 Исключение ускоряет синхронизацию и экономит трафик. Некоторые системы (MAME, Final Burn Neo) создают крупные сохранения, которые не обязательно держать в облаке. Исключить можно через центр управления или веб-интерфейс. Исключённая система не скачивается и не выгружается.
@@ -264,7 +286,10 @@ sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 Запустите игру один раз, выйдите и зайдите снова — эмулятор подхватит файл.
 
 **Можно другое облако?**
-Да, если оно работает через WebDAV — при установке выберите пункт «Nextcloud/OwnCloud/другой WebDAV» и введите свой адрес сервера.
+Да, если оно работает через WebDAV — при установке выберите пункт «Nextcloud/OwnCloud/другой WebDAV» и введите свой адрес сервера. Перейти на другое облако позже можно без переустановки — пункт 16 «Сменить облако».
+
+**Облако тормозит или не отвечает?**
+Состояние облака видно в шапке центра управления и в веб-интерфейсе. Если облако не отдаёт какой-то файл, он пропускается и скачивается в следующий раз, остальное синхронизируется как обычно. Если сервис долго работает плохо, переключитесь на другое облако через пункт 16: если синхронизация в этот момент зависла, скрипт предложит её остановить.
 
 ## Благодарности
 
@@ -282,7 +307,7 @@ sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 
 <h1 align="center">Save Sync</h1>
 
-![Version](https://img.shields.io/badge/version-1.4.6-blue)
+![Version](https://img.shields.io/badge/version-1.4.7-blue)
 ![Platform](https://img.shields.io/badge/platform-Batocera%20%7C%20KNULLI%20%7C%20Recalbox-orange)
 
 **EN** · [Русский выше ↑](#top)
@@ -306,7 +331,6 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 - ROM copying and downloading — upload your collection to the cloud, or pull down ROMs (and whole systems) you don't have locally yet
 - Download ROMs from a public link (Yandex Disk, pCloud, Nextcloud / ownCloud, archive.org) — straight to the device or the cloud: pick individual files and folders, take just the games you want out of a zip, unpack .zip / .7z / .rar
 - No always-on device needed: your devices don't have to be online at the same time, and there's no dedicated server or NAS to run — just a regular cloud WebDAV account
-- Shows a short on-screen notification after a sync: what was received and sent, or an error. Works on Batocera and KNULLI; Recalbox has no notifications. Can be turned on and off in the control panel and in the web interface
 - Works with any number of devices, in any mix of systems
 
 ## How syncing works
@@ -321,11 +345,21 @@ On every sync the device and the cloud are compared with how things looked last 
 
 **Turn on a device** — it pulls saves changed on other devices. If you played on another one, that progress is already here.
 
-**Exit a game** — sends what changed on this device and also pulls what changed on others.
+**Exit a game** — sends what changed on this device and pulls what changed on others. How exactly depends on the "Sync" setting (control panel, item 9, or the web interface):
+
+| Mode | After a game |
+|---|---|
+| **Only when changed** (default) | if the saves on this device changed — a sync as in "After every game"; if they did not, the cloud is not contacted, and changes from other devices arrive at boot or after a game in which the saves change |
+| **After every game** | changes and deletions are sent and downloaded, without listing all cloud files. Good if you play on several devices |
+| **Full** | the whole list of cloud files is compared, including files added to the cloud by hand. The slowest |
+
+At boot and on a manual run the sync is always full.
+
+**Rename a save** — for example, the emulator shifted the save-state slots after one was deleted. A file from 1 MB is renamed right in the cloud, without sending it again.
 
 **Delete a save** — it's removed from the cloud on the next sync (for example when you exit a game), and from other devices on their next sync.
 
-**The same save changed on different devices** — the newer version is kept, and the older one can be stored as a copy in the `GameSaves_conflicts` cloud folder, named with the device and date, e.g. `snes/Zelda.srm.KNULLI-3f2a.2026-09-27_18-40-00`. It never asks you anything; a line about the conflict goes to the log. How many days such copies are kept is the "Conflict copies" setting (web interface or control panel): 3 days by default, 0 means don't keep. The age counts from the moment of the conflict, and any device removes old copies during its own sync.
+**The same save changed on different devices** — the newer version is kept, and the older one can be stored as a copy in the `GameSaves_conflicts` cloud folder, named with the device and date, e.g. `snes/Zelda.srm.KNULLI-3f2a.2026-09-27_18-40-00`. Nothing is asked during the sync: a line about the conflict goes to the log, an on-screen notification appears (Batocera and KNULLI), and the "Saves" tab of the web interface shows a "Save conflicts" block where the other version can be restored or deleted. How many days such copies are kept is the "Conflict copies" setting (web interface or control panel): 3 days by default, 0 means don't keep. The age counts from the moment of the conflict, and old copies are removed during its sync by any device that keeps copies. A device set to 0 makes no copies and leaves the copies of other devices alone.
 
 **Which saves are synced** — only those of systems you play on this device: the system has ROMs here, or its saves are already on the device. Saves of other systems stay in the cloud and are not downloaded here; once ROMs appear, the system joins the next sync and the cloud saves come down first. Any system can be excluded manually, and systems whose saves exist only in the cloud are listed among the exclusions with an "only in the cloud" badge.
 
@@ -352,6 +386,13 @@ Any WebDAV-compatible storage works, including:
 - Mega
 
 Yandex, Mail.ru, and Fastmail require an **app password** rather than your regular account password — the installer will tell you where to generate one for whichever service you pick.
+
+**Change the cloud** at any time without reinstalling — item 16 "Change cloud" in the control panel. The script checks the connection and offers two options:
+
+- **Make the cloud a copy of this device** — for the first device: the saves in the new cloud become the same as here
+- **Merge saves with the cloud** — for the other devices: others' saves are downloaded, ours are sent, nothing is deleted
+
+The old cloud is not changed, and the previous settings are kept in `rclone.conf.bak`.
 
 ## Installation
 
@@ -409,7 +450,9 @@ Recalbox:
 /recalbox/share/system/install_sync.sh --config
 ```
 
-Everything is menu-driven from here: download, upload and full save sync, excluding specific systems from save sync, ROM backup/restore, download from a public link, sync interval, retry count, conflict copies, statistics and logs, full diagnostics, and restarting the web interface.
+Everything is menu-driven from here: download, upload and full save sync, excluding specific systems from save sync, ROM backup/restore, download from a public link, sync interval, retry count, conflict copies, sync mode, statistics and logs, full diagnostics, on-screen notifications, changing the cloud, and restarting the web interface.
+
+The menu header shows the connected cloud and its state: `✓ connected`, `⚠ slow (12 s)`, `✗ not responding` or `✗ no internet`.
 
 ## Web interface
 
@@ -419,7 +462,11 @@ http://YOUR_DEVICE_IP:8080
 ```
 It mirrors every feature in the control panel — sync, ROM management, link downloads, exclusions, live progress, statistics, logs — from any browser on the same network. (If it doesn't come up right away after a fresh install, restart it from the control panel or just reboot the device.)
 
-Statistics split syncs into three groups: without changes, with changes, and with errors.
+Save statistics are in the top bar: syncs without changes, with changes and with errors. ROM statistics are a line in the "ROMs" tab.
+
+The cloud card shows the connected service, free space and state: `slow (12 s)` if the cloud answers slowly, `not responding` if it does not answer. So when a sync takes long, you see right away where the problem is.
+
+The web interface takes commands only from its own page: another website open in the browser cannot control it.
 
 ## Downloading ROMs from a public link
 
@@ -458,7 +505,7 @@ Inside the device's system folder, the script creates:
 - `.sync_state`, `.sync_base.json` — sync state (how the saves looked at the last sync)
 - `roms_filter_sync` — ROM filter
 - `bin/rclone` — rclone itself
-- `.config/rclone/rclone.conf` — cloud config
+- `.config/rclone/rclone.conf` — cloud config (`rclone.conf.bak` — the previous one, after changing the cloud)
 - `logs/save_sync.log` — sync log
 
 It also adds a game-exit hook (triggers the save upload) and a startup line to the system's autostart file (`custom.sh` or `services/custom_service`).
@@ -501,13 +548,13 @@ Currently Batocera, KNULLI, and Recalbox. Open an issue if you'd like another CF
 Only briefly, at boot and when exiting a game. Play offline the rest of the time; saves sync automatically once you're back online.
 
 **How long does syncing take?**
-Depends on file size and connection speed. Larger saves (1–4 MB) can take a few minutes. Don't power off right after a session with heavy saves — give it a moment. Same on download: big saves don't pull down instantly.
+If the saves did not change — about a second (in "Only when changed" mode the cloud is not contacted). Otherwise it depends on file size, connection speed and the cloud itself. Larger saves (1–4 MB) can take a few minutes. Don't power off right after a session with heavy saves — give it a moment. Same on download: big saves don't pull down instantly.
 
 **What's the sync interval?**
 The minimum time between syncs. Set it to 5 minutes, for example, and a sync on game exit only actually runs if more than 5 minutes have passed since the last one — keeps frequent game-exits from hammering your cloud storage. If you play on two devices one after another, the interval can delay the upload, and you end up with a conflict instead of a plain sync — it is resolved automatically, the newer version is kept.
 
 **What are "Conflict copies"?**
-If the same save was changed on two devices before they synced, the newer version is kept and the losing one can be stored in the `GameSaves_conflicts` cloud folder, in case the wrong one was picked. How long (3 days by default, 0 means don't keep) is set in the web interface or the control panel. To get the old version back, copy the file from that folder into `GameSaves` and remove the device and date tag from its name.
+If the same save was changed on two devices before they synced, the newer version is kept and the losing one can be stored in the `GameSaves_conflicts` cloud folder, in case the wrong one was picked. How long (3 days by default, 0 means don't keep) is set in the web interface or the control panel. The easiest way to get the other version back is the web interface: "Saves" tab → "Save conflicts" → "Restore". The chosen version becomes the current one on all devices, and the current one is stored with the conflicts too, so the choice can be undone. If the game is running, exit it first.
 
 **Why exclude a system from sync?**
 Excluding a system speeds up sync and saves bandwidth. Some systems (MAME, FinalBurn Neo) produce large save files you may not want cluttering your cloud storage. Exclude them from the control panel or web UI. An excluded system is neither downloaded nor uploaded.
@@ -540,7 +587,10 @@ Each device keeps its own slot counter. If one device has your save in slot 3 an
 Launch the game once, exit, and reopen it — the emulator will pick up the file on the next run.
 
 **Can I use a different cloud provider?**
-Yes, if it speaks WebDAV — pick the "Nextcloud/ownCloud/other WebDAV" option during setup and enter your own server URL.
+Yes, if it speaks WebDAV — pick the "Nextcloud/ownCloud/other WebDAV" option during setup and enter your own server URL. You can move to another cloud later without reinstalling — item 16 "Change cloud".
+
+**The cloud is slow or not responding?**
+The cloud state is shown in the control panel header and in the web interface. If the cloud does not give some file, it is skipped and downloaded next time, the rest syncs as usual. If the service keeps working badly, switch to another cloud with item 16: if a sync is stuck at that moment, the script offers to stop it.
 
 ## Credits
 
