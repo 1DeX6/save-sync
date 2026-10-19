@@ -6,7 +6,7 @@
 
 <h1 align="center">Save Sync</h1>
 
-![Version](https://img.shields.io/badge/version-1.4.7-blue)
+![Version](https://img.shields.io/badge/version-1.4.8-blue)
 ![Platform](https://img.shields.io/badge/platform-Batocera%20%7C%20KNULLI%20%7C%20Recalbox-orange)
 
 **RU** · [English below ↓](#english)
@@ -29,6 +29,7 @@
 - Сохранения портов PortMaster синхронизируются автоматически — только сами сохранения, без данных игры и настроек экрана
 - Копирование и загрузка ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет локально
 - Загрузка ромов по публичной ссылке (Яндекс.Диск, pCloud, Nextcloud / ownCloud, archive.org) — сразу на устройство или в облако: можно выбрать отдельные файлы и папки, взять нужные игры из zip-архива, распаковать .zip / .7z / .rar
+- **Каталог игр**: сборку с `gamelist.xml` можно открыть как каталог — с обложками и описаниями, выбрать игры и медиа, а игры сразу появятся в списке с картинками, без скрапинга
 - Не нужно постоянно включённое устройство: не требуется, чтобы оба девайса были онлайн одновременно, и не нужен отдельный сервер или NAS — только обычный облачный WebDAV-аккаунт
 - Работает с любым числом устройств в любом сочетании систем
 
@@ -91,7 +92,12 @@
 - **Сделать облако копией этого устройства** — для первого устройства: сохранения в новом облаке станут такими же, как здесь
 - **Объединить сохранения с облаком** — для остальных устройств: чужие сохранения скачаются, свои загрузятся, ничего не удалится
 
-Старое облако при этом не меняется, а прежние настройки сохраняются в `rclone.conf.bak`.
+Старое облако при этом не меняется, а его настройки сохраняются в `rclone.conf.bak`. **Вернуться к прежнему облаку** можно без повторного ввода данных:
+
+- в центре управления — пункт 16 → «Вернуться к прежнему»
+- в веб-интерфейсе — вкладка «Настройки», первый пункт «Облако»
+
+Облака при этом меняются местами, так что между двумя сервисами можно переключаться туда и обратно. Перед переключением проверяется подключение: если прежнее облако не отвечает, ничего не меняется, а на экране будет понятная причина. При переключении из веб-интерфейса сохранения объединяются с облаком — ничего не удаляется. Во время синхронизации или загрузки переключение не выполняется.
 
 ## Установка
 
@@ -134,7 +140,7 @@ chmod +x /recalbox/share/system/install_sync.sh
 
 **4. Следуйте инструкциям на экране** — выберите облачный сервис, введите логин и пароль, дождитесь окончания установки. Если скрипт уже установлен, вместо этого предложит обновиться с сохранением текущих настроек.
 
-> **Обновление с прошлых версий:** обновите скрипт на всех своих устройствах, а не только на одном — новая синхронизация ведёт учёт иначе, и устройства со старой и новой версиями будут работать вразнобой.
+> **Обновление с прошлых версий:** если обновляетесь с версии ниже 1.4.7, обновите скрипт на всех своих устройствах, а не только на одном — с 1.4.7 синхронизация ведёт учёт иначе, и устройства со старой и новой версиями будут работать вразнобой. В остальных случаях обновлять лучше тоже на всех устройствах, чтобы везде были одинаковые возможности.
 
 Для работы нужен `python3` (он же запускает веб-интерфейс): на проверенных версиях Batocera, KNULLI и Recalbox он есть. Если его нет, синхронизация не запустится, а в логе будет написано, чего не хватает.
 
@@ -159,11 +165,13 @@ Recalbox:
 ```
 http://IP_АДРЕС_УСТРОЙСТВА:8080
 ```
-Дублирует все функции центра управления — синхронизацию, работу с ромами, загрузку по ссылке, исключения, живой прогресс, статистику, логи — из браузера любого устройства в той же сети. (Если не открывается сразу после установки — перезапустите через центр управления или перезагрузите устройство.)
+Дублирует все функции центра управления — синхронизацию, работу с ромами, загрузку по ссылке и каталог игр, исключения, живой прогресс, статистику, логи — из браузера любого устройства в той же сети. (Если не открывается сразу после установки — перезапустите через центр управления или перезагрузите устройство.)
 
 Статистика сохранений — в верхней панели: синхронизации без изменений, с изменениями и с ошибкой. Статистика ромов — строкой во вкладке «Ромы».
 
 Карточка облака показывает подключённый сервис, свободное место и состояние: если облако отвечает медленно — `медленно (12 с)`, если не отвечает — `не отвечает`. Так сразу видно, где проблема, если синхронизация идёт долго.
+
+Во вкладке «Настройки» первым пунктом — переключение между текущим и прежним облаком (появляется после первой смены облака).
 
 Веб-интерфейс принимает команды только со своей страницы: сторонний сайт, открытый в браузере, не сможет им управлять.
 
@@ -174,10 +182,26 @@ http://IP_АДРЕС_УСТРОЙСТВА:8080
 - Скачивать можно на устройство (в `roms/<система>`) или сразу в облако (`GameROMs/<система>`), ничего не занимая на карте
 - Из zip-архива можно выбрать отдельные файлы — читается только нужное, архив целиком качать не придётся
 - Скачанные `.zip` / `.7z` / `.rar` можно распаковать — на устройстве или прямо в облаке (для `.7z` и `.rar` нужна программа `7z`, `7zr`, `unrar` или `bsdtar`; на Recalbox обычно доступен только `.7z`)
-- Файлы, которые уже есть на устройстве, пропускаются, а прерванная загрузка докачивается при повторном запуске той же ссылки
+- Файлы, которые уже есть на устройстве (то же имя и размер в `roms/<система>`), отмечены «✓ на устройстве» прямо в списке и пропускаются, а прерванная загрузка докачивается при повторном запуске той же ссылки
 - Перед началом проверяется свободное место: считается только то, что действительно нужно докачать
+- Система выбирается автоматически по именам: архив `nes.zip`, папка `snes`, сборка archive.org `gb_drago557`. Выбранная вручную система не меняется
+- Повторное открытие той же ссылки (в течение 10 минут) показывает список сразу, без нового запроса к сервису
 
 Доступно в веб-интерфейсе и в центре управления (пункт «Скачать по публичной ссылке»).
+
+## Каталог игр
+
+Если по ссылке лежит сборка игр с файлом `gamelist.xml` (список игр EmulationStation) — в папке или внутри большого zip-архива (как у сборок Скай и drago557 на archive.org и Яндекс.Диске) — в веб-интерфейсе появится кнопка **«Открыть как каталог»**.
+
+- Список игр с поиском, годом и размером; по нажатию на название — обложка, описание, жанр, число игроков
+- Выбор типов медиа (обложки, изображения, логотипы, видео и др.) с размером каждого типа; видео и руководства по умолчанию выключены, выбор запоминается
+- Скачиваются только отмеченные игры и только их медиа; многодисковые игры (`.m3u`, `.cue`, `.gdi`, `.ccd`) — вместе со всеми файлами образа
+- Записи игр добавляются в `roms/<система>/gamelist.xml`: игры сразу видны с обложками и описаниями, без скрапинга. Уже существующие записи не перезаписываются — дополняются только недостающие поля, а своё название, «избранное» и число запусков сохраняются
+- Игры, которые уже есть на устройстве, отмечены «✓ на устройстве»; повторное скачивание пропускает готовые файлы и докачивает только новые медиа
+- Скачивать можно на устройство или сразу в облако (`GameROMs/<система>`, на карту ничего не пишется) — `gamelist.xml` в облаке дописывается, и игры придут на устройства с описаниями при загрузке ромов
+- Картинки грузятся быстро: каждая — один небольшой запрос, архив целиком не скачивается
+
+> **Recalbox:** предлагаются только изображение, обложка и видео — остальное Recalbox не показывает. После скачивания Recalbox сам покажет окно **«Список игр изменён!»** — нажмите **«Обновить»**, и игры появятся с описаниями. Пункт меню «Обновить списки игр» для этого не подходит: он перезапишет `gamelist.xml` тем, что уже загружено в память.
 
 ## Диагностика
 
@@ -199,12 +223,12 @@ Recalbox:
 - `download_sync.sh`, `upload_sync.sh` — запуск загрузки и выгрузки сохранений
 - `sync_engine.py` — сам алгоритм двусторонней синхронизации: что изменилось здесь, что в облаке, конфликты, сохранения портов
 - `download_roms.sh`, `upload_roms.sh` — загрузка и выгрузка ромов
-- `link_download.py` — загрузка по публичной ссылке
+- `link_download.py` — загрузка по публичной ссылке и каталог игр
 - `sync.conf` — основной конфиг
 - `.sync_state`, `.sync_base.json` — состояние синхронизации (как выглядели сохранения при последней синхронизации)
 - `roms_filter_sync` — фильтр ромов
 - `bin/rclone` — сам rclone
-- `.config/rclone/rclone.conf` — конфиг облака (`rclone.conf.bak` — прежний, после смены облака)
+- `.config/rclone/rclone.conf` — конфиг облака (`rclone.conf.bak` — прежнее облако, к нему можно вернуться)
 - `logs/save_sync.log` — лог синхронизации
 
 Также добавляется хук выхода из игры (запускает выгрузку сохранений) и строка запуска в файл автозагрузки системы (`custom.sh` или `services/custom_service`).
@@ -220,7 +244,8 @@ rm -f /userdata/system/download_sync.sh /userdata/system/upload_sync.sh \
       /userdata/system/link_download.py /userdata/system/sync_engine.py /userdata/system/.sync_base.json \
       /userdata/system/sync.conf /userdata/system/.sync_state /userdata/system/roms_filter_sync \
       /userdata/system/scripts/save-sync.sh /userdata/system/logs/save_sync.log \
-      /userdata/system/.config/rclone/rclone.conf /userdata/system/bin/rclone
+      /userdata/system/.config/rclone/rclone.conf /userdata/system/.config/rclone/rclone.conf.bak \
+      /userdata/system/bin/rclone
 sed -i '/download_sync.sh/d' /userdata/system/custom.sh 2>/dev/null
 ```
 
@@ -232,7 +257,8 @@ rm -f /recalbox/share/system/download_sync.sh /recalbox/share/system/upload_sync
       /recalbox/share/system/sync.conf /recalbox/share/system/.sync_state \
       /recalbox/share/system/roms_filter_sync \
       /recalbox/share/system/logs/save_sync.log \
-      /recalbox/share/system/.config/rclone/rclone.conf /recalbox/share/system/bin/rclone \
+      /recalbox/share/system/.config/rclone/rclone.conf /recalbox/share/system/.config/rclone/rclone.conf.bak \
+      /recalbox/share/system/bin/rclone \
       "/recalbox/share/userscripts/save-sync[endgame].sh"
 sed -i '/download_sync.sh/d' /recalbox/share/system/custom.sh 2>/dev/null
 sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
@@ -270,6 +296,8 @@ sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 **Что именно делает "Копирование и загрузка ромов"?**
 Это не двусторонняя синхронизация, а резервное копирование и восстановление по отдельности. Выгрузка отправляет ромы в облако (создаёт копию), загрузка — забирает их обратно (восстанавливает на устройстве). При выгрузке файлы, которых больше нет на устройстве, удаляются и из облачной копии.
 
+Медиа (обложки, картинки, видео) копируются по настройке «Медиа» — **выкл / без видео / с видео** (центр управления → «Копирование и загрузка ромов», или вкладка «Ромы» в веб-интерфейсе). `gamelist.xml` при загрузке ромов не затирается версией из облака: записи из облака дописываются, а свои данные устройства (название, «избранное», число запусков, игры, которых нет в облаке) сохраняются.
+
 **Удалил сохранение, а в облаке осталось?**
 Исчезнет при следующей синхронизации (например, при выходе из игры) — а на других устройствах удалится при их следующей синхронизации. Если хотите синхронизировать сразу, зайдите в любую игру и выйдите, чтобы вызвать синхронизацию принудительно.
 
@@ -289,7 +317,10 @@ sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 Да, если оно работает через WebDAV — при установке выберите пункт «Nextcloud/OwnCloud/другой WebDAV» и введите свой адрес сервера. Перейти на другое облако позже можно без переустановки — пункт 16 «Сменить облако».
 
 **Облако тормозит или не отвечает?**
-Состояние облака видно в шапке центра управления и в веб-интерфейсе. Если облако не отдаёт какой-то файл, он пропускается и скачивается в следующий раз, остальное синхронизируется как обычно. Если сервис долго работает плохо, переключитесь на другое облако через пункт 16: если синхронизация в этот момент зависла, скрипт предложит её остановить.
+Состояние облака видно в шапке центра управления и в веб-интерфейсе. Если облако не отдаёт какой-то файл, он пропускается и скачивается в следующий раз, остальное синхронизируется как обычно. Если сервис долго работает плохо, переключитесь на другое облако через пункт 16: если синхронизация в этот момент зависла, скрипт предложит её остановить. Если раньше уже пользовались другим облаком, вернуться к нему можно без ввода данных — пункт 16 или вкладка «Настройки» в веб-интерфейсе.
+
+**Скачал игры из каталога на Recalbox, а описаний и картинок нет?**
+Когда Recalbox покажет окно «Список игр изменён!», нажмите «Обновить». Если окно пропустили, удалите игру и скачайте её ещё раз, затем нажмите «Обновить». Пункт меню «Обновить списки игр» не используйте — он перезапишет `gamelist.xml`.
 
 ## Благодарности
 
@@ -307,7 +338,7 @@ sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 
 <h1 align="center">Save Sync</h1>
 
-![Version](https://img.shields.io/badge/version-1.4.7-blue)
+![Version](https://img.shields.io/badge/version-1.4.8-blue)
 ![Platform](https://img.shields.io/badge/platform-Batocera%20%7C%20KNULLI%20%7C%20Recalbox-orange)
 
 **EN** · [Русский выше ↑](#top)
@@ -330,6 +361,7 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 - PortMaster port saves sync automatically — only the saves themselves, not game data or screen settings
 - ROM copying and downloading — upload your collection to the cloud, or pull down ROMs (and whole systems) you don't have locally yet
 - Download ROMs from a public link (Yandex Disk, pCloud, Nextcloud / ownCloud, archive.org) — straight to the device or the cloud: pick individual files and folders, take just the games you want out of a zip, unpack .zip / .7z / .rar
+- **Game catalog**: a collection with a `gamelist.xml` can be opened as a catalog with covers and descriptions — pick games and media, and the games show up in the list with artwork right away, no scraping
 - No always-on device needed: your devices don't have to be online at the same time, and there's no dedicated server or NAS to run — just a regular cloud WebDAV account
 - Works with any number of devices, in any mix of systems
 
@@ -392,7 +424,12 @@ Yandex, Mail.ru, and Fastmail require an **app password** rather than your regul
 - **Make the cloud a copy of this device** — for the first device: the saves in the new cloud become the same as here
 - **Merge saves with the cloud** — for the other devices: others' saves are downloaded, ours are sent, nothing is deleted
 
-The old cloud is not changed, and the previous settings are kept in `rclone.conf.bak`.
+The old cloud is not changed, and its settings are kept in `rclone.conf.bak`. **Switch back to the previous cloud** without entering anything again:
+
+- in the control panel — item 16 → "Go back to the previous one"
+- in the web interface — the "Settings" tab, first item "Cloud"
+
+The two clouds swap places, so you can switch between two services back and forth. The connection is checked first: if the previous cloud does not answer, nothing changes and the reason is shown in plain words. Switching from the web interface merges the saves with the cloud — nothing is deleted. The switch is not done while a sync or a download is running.
 
 ## Installation
 
@@ -435,7 +472,7 @@ chmod +x /recalbox/share/system/install_sync.sh
 
 **4. Follow the prompts** — pick your cloud service, enter your credentials, and installation finishes on its own. If a previous install is detected, you'll be offered an update instead, with your existing settings preserved.
 
-> **Updating from an earlier version:** update the script on all your devices, not just one — the new sync keeps its records differently, so devices on the old and new versions would work out of step.
+> **Updating from an earlier version:** if you are updating from a version below 1.4.7, update the script on all your devices, not just one — since 1.4.7 the sync keeps its records differently, so devices on the old and new versions would work out of step. Otherwise it is still best to update all devices, so they all have the same features.
 
 `python3` is required (it also runs the web interface): it is present on the tested versions of Batocera, KNULLI and Recalbox. If it's missing, syncing won't run and the log will say what's missing.
 
@@ -460,11 +497,13 @@ After installation, a small web server starts automatically:
 ```
 http://YOUR_DEVICE_IP:8080
 ```
-It mirrors every feature in the control panel — sync, ROM management, link downloads, exclusions, live progress, statistics, logs — from any browser on the same network. (If it doesn't come up right away after a fresh install, restart it from the control panel or just reboot the device.)
+It mirrors every feature in the control panel — sync, ROM management, link downloads and the game catalog, exclusions, live progress, statistics, logs — from any browser on the same network. (If it doesn't come up right away after a fresh install, restart it from the control panel or just reboot the device.)
 
 Save statistics are in the top bar: syncs without changes, with changes and with errors. ROM statistics are a line in the "ROMs" tab.
 
 The cloud card shows the connected service, free space and state: `slow (12 s)` if the cloud answers slowly, `not responding` if it does not answer. So when a sync takes long, you see right away where the problem is.
+
+The first item of the "Settings" tab switches between the current and the previous cloud (it appears after the cloud has been changed once).
 
 The web interface takes commands only from its own page: another website open in the browser cannot control it.
 
@@ -475,10 +514,26 @@ Paste a link to a folder or a file — Save Sync shows what's inside, you pick w
 - Download to the device (`roms/<system>`) or straight to the cloud (`GameROMs/<system>`), using no space on the card
 - Pick individual files from inside a zip — only what you chose is read, the whole archive doesn't have to be downloaded
 - Downloaded `.zip` / `.7z` / `.rar` can be unpacked — on the device or right in the cloud (`.7z` and `.rar` need `7z`, `7zr`, `unrar` or `bsdtar` on the system; on Recalbox usually only `.7z` is available)
-- Files already on the device are skipped, and an interrupted download resumes when you run the same link again
+- Files already on the device (same name and size in `roms/<system>`) are marked "✓ on the device" right in the list and skipped, and an interrupted download resumes when you run the same link again
 - Free space is checked up front, counting only what actually still has to be downloaded
+- The system is picked automatically from the names: an archive `nes.zip`, a folder `snes`, an archive.org collection `gb_drago557`. A system chosen by hand is kept
+- Opening the same link again (within 10 minutes) shows the list at once, without asking the service again
 
 Available in the web interface and in the control panel ("Download from a public link").
+
+## Game catalog
+
+If a link holds a game collection with a `gamelist.xml` (EmulationStation games list) — in a folder or inside one big zip (like the Ckau and drago557 collections on archive.org and Yandex Disk) — the web interface shows an **"Open as a catalog"** button.
+
+- Games list with search, year and size; tap a title for the cover, description, genre and number of players
+- Choose the media types (covers, images, logos, videos and more), with the size of each; videos and manuals are off by default, the choice is remembered
+- Only the ticked games and only their media are downloaded; multi-disc games (`.m3u`, `.cue`, `.gdi`, `.ccd`) come with all their image files
+- Game entries are added to `roms/<system>/gamelist.xml`: the games show up with covers and descriptions right away, no scraping. Existing entries are not overwritten — only missing fields are filled in, and your own name, "favorite" and play count are kept
+- Games already on the device are marked "✓ on the device"; downloading again skips finished files and fetches only new media
+- Download to the device or straight to the cloud (`GameROMs/<system>`, nothing is written to the card) — the cloud `gamelist.xml` is extended, and the games reach your devices with descriptions on a ROM download
+- Pictures load fast: each one is a single small request, the archive is never downloaded as a whole
+
+> **Recalbox:** only image, thumbnail and video are offered — Recalbox does not show the rest. After a download Recalbox itself shows a window saying that the games list has changed — confirm the update in it, and the games appear with descriptions. The menu item for updating the games lists does not work for this: it overwrites `gamelist.xml` with what is already in memory.
 
 ## Diagnostics
 
@@ -500,12 +555,12 @@ Inside the device's system folder, the script creates:
 - `download_sync.sh`, `upload_sync.sh` — start the save download/upload
 - `sync_engine.py` — the two-way sync algorithm itself: what changed here, what changed in the cloud, conflicts, port saves
 - `download_roms.sh`, `upload_roms.sh` — ROM download/upload
-- `link_download.py` — download from a public link
+- `link_download.py` — download from a public link and the game catalog
 - `sync.conf` — main config
 - `.sync_state`, `.sync_base.json` — sync state (how the saves looked at the last sync)
 - `roms_filter_sync` — ROM filter
 - `bin/rclone` — rclone itself
-- `.config/rclone/rclone.conf` — cloud config (`rclone.conf.bak` — the previous one, after changing the cloud)
+- `.config/rclone/rclone.conf` — cloud config (`rclone.conf.bak` — the previous cloud, you can switch back to it)
 - `logs/save_sync.log` — sync log
 
 It also adds a game-exit hook (triggers the save upload) and a startup line to the system's autostart file (`custom.sh` or `services/custom_service`).
@@ -521,7 +576,8 @@ rm -f /userdata/system/download_sync.sh /userdata/system/upload_sync.sh \
       /userdata/system/link_download.py /userdata/system/sync_engine.py /userdata/system/.sync_base.json \
       /userdata/system/sync.conf /userdata/system/.sync_state /userdata/system/roms_filter_sync \
       /userdata/system/scripts/save-sync.sh /userdata/system/logs/save_sync.log \
-      /userdata/system/.config/rclone/rclone.conf /userdata/system/bin/rclone
+      /userdata/system/.config/rclone/rclone.conf /userdata/system/.config/rclone/rclone.conf.bak \
+      /userdata/system/bin/rclone
 sed -i '/download_sync.sh/d' /userdata/system/custom.sh 2>/dev/null
 ```
 
@@ -533,7 +589,8 @@ rm -f /recalbox/share/system/download_sync.sh /recalbox/share/system/upload_sync
       /recalbox/share/system/sync.conf /recalbox/share/system/.sync_state \
       /recalbox/share/system/roms_filter_sync \
       /recalbox/share/system/logs/save_sync.log \
-      /recalbox/share/system/.config/rclone/rclone.conf /recalbox/share/system/bin/rclone \
+      /recalbox/share/system/.config/rclone/rclone.conf /recalbox/share/system/.config/rclone/rclone.conf.bak \
+      /recalbox/share/system/bin/rclone \
       "/recalbox/share/userscripts/save-sync[endgame].sh"
 sed -i '/download_sync.sh/d' /recalbox/share/system/custom.sh 2>/dev/null
 sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
@@ -571,6 +628,8 @@ Drop them into `GameROMs/<system>/` in your cloud storage, then run a ROM downlo
 **What does "ROM backup and restore" actually do?**
 It's not a two-way sync — upload and download are separate, one-directional operations. Upload pushes your ROMs to the cloud as a backup copy; download pulls them back down to restore on a device. On upload, files no longer present locally are removed from the cloud copy too.
 
+Media (covers, pictures, videos) are copied according to the "Media" setting — **off / no video / with video** (control panel → "ROM copying and downloading", or the "ROMs" tab of the web interface). A ROM download no longer overwrites `gamelist.xml` with the cloud version: the cloud entries are added, and the device's own data (names, "favorite", play counts, games that are not in the cloud) is kept.
+
 **Deleted a save but it's still in the cloud?**
 It disappears on the next sync (for example when you exit a game) — and from other devices on their next sync. Launch and quit any game to force a sync right away if you don't want to wait.
 
@@ -590,7 +649,10 @@ Launch the game once, exit, and reopen it — the emulator will pick up the file
 Yes, if it speaks WebDAV — pick the "Nextcloud/ownCloud/other WebDAV" option during setup and enter your own server URL. You can move to another cloud later without reinstalling — item 16 "Change cloud".
 
 **The cloud is slow or not responding?**
-The cloud state is shown in the control panel header and in the web interface. If the cloud does not give some file, it is skipped and downloaded next time, the rest syncs as usual. If the service keeps working badly, switch to another cloud with item 16: if a sync is stuck at that moment, the script offers to stop it.
+The cloud state is shown in the control panel header and in the web interface. If the cloud does not give some file, it is skipped and downloaded next time, the rest syncs as usual. If the service keeps working badly, switch to another cloud with item 16: if a sync is stuck at that moment, the script offers to stop it. If you used another cloud before, you can go back to it without entering anything — item 16 or the "Settings" tab of the web interface.
+
+**Downloaded games from a catalog on Recalbox, but there are no descriptions or pictures?**
+When Recalbox shows the window saying that the games list has changed, confirm the update in it. If you missed the window, delete the game, download it again and confirm the update. Don't use the menu item for updating the games lists — it overwrites `gamelist.xml`.
 
 ## Credits
 
