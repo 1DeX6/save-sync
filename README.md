@@ -6,7 +6,7 @@
 
 <h1 align="center">Save Sync</h1>
 
-![Version](https://img.shields.io/badge/version-1.4.9-blue)
+![Version](https://img.shields.io/badge/version-1.5.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Batocera%20%7C%20KNULLI%20%7C%20Recalbox-orange)
 
 **RU** · [English below ↓](#english)
@@ -140,7 +140,7 @@ chmod +x /recalbox/share/system/install_sync.sh
 
 **4. Следуйте инструкциям на экране** — выберите облачный сервис, введите логин и пароль, дождитесь окончания установки. Если скрипт уже установлен, вместо этого предложит обновиться с сохранением текущих настроек.
 
-> **Обновление с прошлых версий:** если обновляетесь с версии ниже 1.4.7, обновите скрипт на всех своих устройствах, а не только на одном — с 1.4.7 синхронизация ведёт учёт иначе, и устройства со старой и новой версиями будут работать вразнобой. В остальных случаях обновлять лучше тоже на всех устройствах, чтобы везде были одинаковые возможности.
+> **Обновление с прошлых версий:** если обновляетесь с версии ниже 1.4.7, обновите скрипт на всех своих устройствах, а не только на одном — с 1.4.7 синхронизация ведёт учёт иначе, и устройства со старой и новой версиями будут работать вразнобой. В остальных случаях обновлять лучше тоже на всех устройствах, чтобы везде были одинаковые возможности. При обновлении с версии ниже 1.5.0 файлы Save Sync сами переносятся из системной папки в папку `save_sync`; настройки, сохранённые ссылки и состояние синхронизации остаются. Если перенос не удался (например, нет места), ничего не меняется и всё работает как раньше.
 
 Для работы нужен `python3` (он же запускает веб-интерфейс): на проверенных версиях Batocera, KNULLI и Recalbox он есть. Если его нет, синхронизация не запустится, а в логе будет написано, чего не хватает.
 
@@ -176,7 +176,7 @@ http://IP_АДРЕС_УСТРОЙСТВА:8080
 - **«Разделы»** — можно скрыть ромы и загрузку по ссылке, если ими не пользуетесь
 - **«Перенос настроек»** — «Экспорт» скачивает файл настроек, «Импорт» загружает его на другом устройстве. При импорте отмечается, что взять: сохранённые ссылки (добавляются к уже сохранённым), синхронизацию, исключения, системы ромов, разделы. Подключения к облаку и паролей в файле нет
 
-**Ярлык на телефоне:** в Chrome откройте веб-интерфейс, меню → «Добавить на главный экран» — появится значок Save Sync. Чтобы ярлык не сломался при смене IP-адреса, закрепите адрес устройства в роутере (резервирование DHCP).
+**Ярлык на телефоне:** в Chrome откройте веб-интерфейс, меню → «Добавить на главный экран» — появится значок Save Sync.
 
 Веб-интерфейс принимает команды только со своей страницы: сторонний сайт, открытый в браузере, не сможет им управлять.
 
@@ -228,56 +228,45 @@ Recalbox:
 
 ## Создаваемые файлы
 
-В системной папке устройства создаются:
+Всё хранится в системной папке устройства (`/userdata/system` на Batocera и KNULLI, `/recalbox/share/system` на Recalbox):
 
 - `install_sync.sh` — установщик / центр управления
-- `download_sync.sh`, `upload_sync.sh` — запуск загрузки и выгрузки сохранений
-- `sync_engine.py` — сам алгоритм двусторонней синхронизации: что изменилось здесь, что в облаке, конфликты, сохранения портов
-- `download_roms.sh`, `upload_roms.sh` — загрузка и выгрузка ромов
-- `link_download.py` — загрузка по публичной ссылке и каталог игр
-- `sync.conf` — основной конфиг
-- `.sync_state`, `.sync_base.json` — состояние синхронизации (как выглядели сохранения при последней синхронизации)
-- `.sync_manifests/` — копии манифестов облака, чтобы не скачивать их после каждой игры
-- `.catalog_cache/` — списки игр сохранённых каталогов, для мгновенного открытия
-- `roms_filter_sync` — фильтр ромов
-- `bin/rclone` — сам rclone
-- `.config/rclone/rclone.conf` — конфиг облака (`rclone.conf.bak` — прежнее облако, к нему можно вернуться)
 - `logs/save_sync.log` — лог синхронизации
+- `save_sync/` — всё остальное:
+  - `download_sync.sh`, `upload_sync.sh` — запуск загрузки и выгрузки сохранений
+  - `sync_engine.py` — сам алгоритм двусторонней синхронизации: что изменилось здесь, что в облаке, конфликты, сохранения портов
+  - `download_roms.sh`, `upload_roms.sh` — загрузка и выгрузка ромов
+  - `link_download.py` — загрузка по публичной ссылке и каталог игр
+  - `sync.conf` — основной конфиг
+  - `.sync_state`, `.sync_base.json` — состояние синхронизации (как выглядели сохранения при последней синхронизации)
+  - `.sync_manifests/` — копии манифестов облака, чтобы не скачивать их после каждой игры
+  - `.catalog_cache/` — списки игр сохранённых каталогов, для мгновенного открытия
+  - `roms_filter_sync` — фильтр ромов
+  - `bin/rclone` — сам rclone
+  - `rclone.conf` — подключение к облаку (`rclone.conf.bak` — прежнее облако, к нему можно вернуться)
 
-Также добавляется хук выхода из игры (запускает выгрузку сохранений) и строка запуска в файл автозагрузки системы (`custom.sh` или `services/custom_service`).
+Подключение к облаку хранится в своём `rclone.conf`, а не в общем конфиге rclone системы, поэтому Save Sync не мешает другим программам, которые пользуются rclone.
+
+Также добавляется хук выхода из игры (запускает выгрузку сохранений): `scripts/save-sync.sh` на Batocera и KNULLI, `/recalbox/share/userscripts/save-sync[endgame].sh` на Recalbox — и строка запуска в файл автозагрузки системы (`custom.sh` или `services/custom_service`).
 
 В облаке используются папки `GameSaves` (сохранения; для портов — `GameSaves/_ports`), `GameROMs` (ромы) и `GameSaves_conflicts` (копии при конфликтах).
 
 ## Удаление
 
+Запустите установщик и выберите **«Удалить»**, или сразу:
+
 Batocera / KNULLI:
 ```bash
-rm -f /userdata/system/download_sync.sh /userdata/system/upload_sync.sh \
-      /userdata/system/download_roms.sh /userdata/system/upload_roms.sh \
-      /userdata/system/link_download.py /userdata/system/sync_engine.py /userdata/system/.sync_base.json \
-      /userdata/system/sync.conf /userdata/system/.sync_state /userdata/system/roms_filter_sync \
-      /userdata/system/scripts/save-sync.sh /userdata/system/logs/save_sync.log \
-      /userdata/system/.config/rclone/rclone.conf /userdata/system/.config/rclone/rclone.conf.bak \
-      /userdata/system/bin/rclone
-rm -rf /userdata/system/.sync_manifests /userdata/system/.catalog_cache
-sed -i '/download_sync.sh/d' /userdata/system/custom.sh 2>/dev/null
+/userdata/system/install_sync.sh --uninstall
 ```
-
 Recalbox:
 ```bash
-rm -f /recalbox/share/system/download_sync.sh /recalbox/share/system/upload_sync.sh \
-      /recalbox/share/system/download_roms.sh /recalbox/share/system/upload_roms.sh \
-      /recalbox/share/system/link_download.py /recalbox/share/system/sync_engine.py /recalbox/share/system/.sync_base.json \
-      /recalbox/share/system/sync.conf /recalbox/share/system/.sync_state \
-      /recalbox/share/system/roms_filter_sync \
-      /recalbox/share/system/logs/save_sync.log \
-      /recalbox/share/system/.config/rclone/rclone.conf /recalbox/share/system/.config/rclone/rclone.conf.bak \
-      /recalbox/share/system/bin/rclone \
-      "/recalbox/share/userscripts/save-sync[endgame].sh"
-rm -rf /recalbox/share/system/.sync_manifests /recalbox/share/system/.catalog_cache
-sed -i '/download_sync.sh/d' /recalbox/share/system/custom.sh 2>/dev/null
-sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
+/recalbox/share/system/install_sync.sh --uninstall
 ```
+
+Для подтверждения нужно ввести «да». Скрипт спросит, оставить ли `sync.conf` для будущей установки, затем остановит веб-интерфейс и синхронизацию и удалит папку `save_sync`, хук выхода из игры, строки автозагрузки и лог. Свои строки в `custom.sh` / `custom_service` остаются.
+
+Не удаляются: сохранения и ромы на устройстве, всё, что лежит в облаке, и сам `install_sync.sh` — его можно удалить вручную.
 
 ## Частые вопросы
 
@@ -353,7 +342,7 @@ sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 
 <h1 align="center">Save Sync</h1>
 
-![Version](https://img.shields.io/badge/version-1.4.9-blue)
+![Version](https://img.shields.io/badge/version-1.5.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Batocera%20%7C%20KNULLI%20%7C%20Recalbox-orange)
 
 **EN** · [Русский выше ↑](#top)
@@ -487,7 +476,7 @@ chmod +x /recalbox/share/system/install_sync.sh
 
 **4. Follow the prompts** — pick your cloud service, enter your credentials, and installation finishes on its own. If a previous install is detected, you'll be offered an update instead, with your existing settings preserved.
 
-> **Updating from an earlier version:** if you are updating from a version below 1.4.7, update the script on all your devices, not just one — since 1.4.7 the sync keeps its records differently, so devices on the old and new versions would work out of step. Otherwise it is still best to update all devices, so they all have the same features.
+> **Updating from an earlier version:** if you are updating from a version below 1.4.7, update the script on all your devices, not just one — since 1.4.7 the sync keeps its records differently, so devices on the old and new versions would work out of step. Otherwise it is still best to update all devices, so they all have the same features. When updating from a version below 1.5.0, the Save Sync files are moved from the system folder into the `save_sync` folder by themselves; settings, saved links and the sync state are kept. If the move fails (no free space, for example), nothing changes and everything works as before.
 
 `python3` is required (it also runs the web interface): it is present on the tested versions of Batocera, KNULLI and Recalbox. If it's missing, syncing won't run and the log will say what's missing.
 
@@ -523,7 +512,7 @@ The first item of the "Settings" tab switches between the current and the previo
 - **"Sections"** — ROMs and downloading from a link can be hidden if you do not use them
 - **"Moving the settings"** — "Export" downloads the settings file, "Import" loads it on another device. On import you choose what to take: saved links (added to the ones already there), sync, exclusions, ROM systems, sections. The cloud connection and passwords are not in the file
 
-**A shortcut on a phone:** open the web interface in Chrome, menu → "Add to Home screen" — a Save Sync icon appears. To keep the shortcut working when the IP address changes, reserve the device's address in your router (DHCP reservation).
+**A shortcut on a phone:** open the web interface in Chrome, menu → "Add to Home screen" — a Save Sync icon appears.
 
 The web interface takes commands only from its own page: another website open in the browser cannot control it.
 
@@ -549,7 +538,7 @@ If a link holds a game collection with a `gamelist.xml` (EmulationStation games 
 
 - Three list views: **"List"**, **"With covers"** (year, size, genre, number of players and the start of the description) and **"Tiles"**. Covers load as you scroll, the browser keeps them for up to 30 days
 - Search, filters by genre and number of players, "Not on the device", sorting by name, year and size; "Selected" — check the ticked games before downloading
-- Tap a game for the cover, the collection's pictures, video, description, genre and number of players; a picture opens on the whole screen and can be paged. Games already on the device show their own covers and description (the "From the device / From the collection" switch)
+- Tap a game for the cover, the collection's pictures, video, description, genre and number of players; a picture opens on the whole screen and can be paged. Games already on the device show their own covers and description (the "Device / Collection" switch)
 - **"Replace media"** and **"Replace description"** — update the media and description of games on the device from the collection (by default the device's own data is left alone)
 - A saved catalog opens at once from a copy of the list on the card while the collection is checked for updates; new games are marked "NEW", changed ones "UPDATED"
 - Choose the media types (covers, images, logos, videos and more), with the size of each; videos and manuals are off by default, the choice is remembered
@@ -575,56 +564,45 @@ Checks rclone version, cloud connectivity, script permissions, config values, fr
 
 ## Files created
 
-Inside the device's system folder, the script creates:
+Everything is kept in the device's system folder (`/userdata/system` on Batocera and KNULLI, `/recalbox/share/system` on Recalbox):
 
 - `install_sync.sh` — installer / control panel
-- `download_sync.sh`, `upload_sync.sh` — start the save download/upload
-- `sync_engine.py` — the two-way sync algorithm itself: what changed here, what changed in the cloud, conflicts, port saves
-- `download_roms.sh`, `upload_roms.sh` — ROM download/upload
-- `link_download.py` — download from a public link and the game catalog
-- `sync.conf` — main config
-- `.sync_state`, `.sync_base.json` — sync state (how the saves looked at the last sync)
-- `.sync_manifests/` — copies of the cloud manifests, so they are not downloaded after every game
-- `.catalog_cache/` — game lists of saved catalogs, for instant opening
-- `roms_filter_sync` — ROM filter
-- `bin/rclone` — rclone itself
-- `.config/rclone/rclone.conf` — cloud config (`rclone.conf.bak` — the previous cloud, you can switch back to it)
 - `logs/save_sync.log` — sync log
+- `save_sync/` — everything else:
+  - `download_sync.sh`, `upload_sync.sh` — start the save download/upload
+  - `sync_engine.py` — the two-way sync algorithm itself: what changed here, what changed in the cloud, conflicts, port saves
+  - `download_roms.sh`, `upload_roms.sh` — ROM download/upload
+  - `link_download.py` — download from a public link and the game catalog
+  - `sync.conf` — main config
+  - `.sync_state`, `.sync_base.json` — sync state (how the saves looked at the last sync)
+  - `.sync_manifests/` — copies of the cloud manifests, so they are not downloaded after every game
+  - `.catalog_cache/` — game lists of saved catalogs, for instant opening
+  - `roms_filter_sync` — ROM filter
+  - `bin/rclone` — rclone itself
+  - `rclone.conf` — the cloud connection (`rclone.conf.bak` — the previous cloud, you can switch back to it)
 
-It also adds a game-exit hook (triggers the save upload) and a startup line to the system's autostart file (`custom.sh` or `services/custom_service`).
+The cloud connection is kept in its own `rclone.conf`, not in the system-wide rclone config, so Save Sync does not get in the way of other programs that use rclone.
+
+It also adds a game-exit hook (triggers the save upload): `scripts/save-sync.sh` on Batocera and KNULLI, `/recalbox/share/userscripts/save-sync[endgame].sh` on Recalbox — and a startup line to the system's autostart file (`custom.sh` or `services/custom_service`).
 
 In the cloud it uses the folders `GameSaves` (saves; ports go to `GameSaves/_ports`), `GameROMs` (ROMs) and `GameSaves_conflicts` (conflict copies).
 
 ## Uninstall
 
+Run the installer and choose **"Uninstall"**, or straight away:
+
 Batocera / KNULLI:
 ```bash
-rm -f /userdata/system/download_sync.sh /userdata/system/upload_sync.sh \
-      /userdata/system/download_roms.sh /userdata/system/upload_roms.sh \
-      /userdata/system/link_download.py /userdata/system/sync_engine.py /userdata/system/.sync_base.json \
-      /userdata/system/sync.conf /userdata/system/.sync_state /userdata/system/roms_filter_sync \
-      /userdata/system/scripts/save-sync.sh /userdata/system/logs/save_sync.log \
-      /userdata/system/.config/rclone/rclone.conf /userdata/system/.config/rclone/rclone.conf.bak \
-      /userdata/system/bin/rclone
-rm -rf /userdata/system/.sync_manifests /userdata/system/.catalog_cache
-sed -i '/download_sync.sh/d' /userdata/system/custom.sh 2>/dev/null
+/userdata/system/install_sync.sh --uninstall
 ```
-
 Recalbox:
 ```bash
-rm -f /recalbox/share/system/download_sync.sh /recalbox/share/system/upload_sync.sh \
-      /recalbox/share/system/download_roms.sh /recalbox/share/system/upload_roms.sh \
-      /recalbox/share/system/link_download.py /recalbox/share/system/sync_engine.py /recalbox/share/system/.sync_base.json \
-      /recalbox/share/system/sync.conf /recalbox/share/system/.sync_state \
-      /recalbox/share/system/roms_filter_sync \
-      /recalbox/share/system/logs/save_sync.log \
-      /recalbox/share/system/.config/rclone/rclone.conf /recalbox/share/system/.config/rclone/rclone.conf.bak \
-      /recalbox/share/system/bin/rclone \
-      "/recalbox/share/userscripts/save-sync[endgame].sh"
-rm -rf /recalbox/share/system/.sync_manifests /recalbox/share/system/.catalog_cache
-sed -i '/download_sync.sh/d' /recalbox/share/system/custom.sh 2>/dev/null
-sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
+/recalbox/share/system/install_sync.sh --uninstall
 ```
+
+Type "yes" to confirm. The script asks whether to keep `sync.conf` for a later install, then stops the web interface and the sync and removes the `save_sync` folder, the game-exit hook, the autostart lines and the log. Your own lines in `custom.sh` / `custom_service` stay.
+
+Not removed: the saves and ROMs on the device, everything in the cloud, and `install_sync.sh` itself — delete it by hand if you like.
 
 ## FAQ
 
