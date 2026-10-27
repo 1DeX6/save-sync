@@ -6,7 +6,7 @@
 
 <h1 align="center">Save Sync</h1>
 
-![Version](https://img.shields.io/badge/version-1.4.8-blue)
+![Version](https://img.shields.io/badge/version-1.4.9-blue)
 ![Platform](https://img.shields.io/badge/platform-Batocera%20%7C%20KNULLI%20%7C%20Recalbox-orange)
 
 **RU** · [English below ↓](#english)
@@ -28,7 +28,7 @@
 - На устройство скачиваются только сохранения тех систем, ромы которых есть на устройстве. Для остальных систем сохранения остаются в облаке и не занимают место на устройстве
 - Сохранения портов PortMaster синхронизируются автоматически — только сами сохранения, без данных игры и настроек экрана
 - Копирование и загрузка ромов — выгрузить коллекцию в облако или скачать оттуда ромы (и целые системы), которых ещё нет локально
-- Загрузка ромов по публичной ссылке (Яндекс.Диск, pCloud, Nextcloud / ownCloud, archive.org) — сразу на устройство или в облако: можно выбрать отдельные файлы и папки, взять нужные игры из zip-архива, распаковать .zip / .7z / .rar
+- Загрузка ромов по публичной ссылке (Яндекс.Диск, pCloud, Nextcloud / ownCloud, archive.org) или прямой ссылке на файл — сразу на устройство или в облако: можно выбрать отдельные файлы и папки, взять нужные игры из zip-архива, распаковать .zip / .7z / .rar
 - **Каталог игр**: сборку с `gamelist.xml` можно открыть как каталог — с обложками и описаниями, выбрать игры и медиа, а игры сразу появятся в списке с картинками, без скрапинга
 - Не нужно постоянно включённое устройство: не требуется, чтобы оба девайса были онлайн одновременно, и не нужен отдельный сервер или NAS — только обычный облачный WebDAV-аккаунт
 - Работает с любым числом устройств в любом сочетании систем
@@ -171,29 +171,40 @@ http://IP_АДРЕС_УСТРОЙСТВА:8080
 
 Карточка облака показывает подключённый сервис, свободное место и состояние: если облако отвечает медленно — `медленно (12 с)`, если не отвечает — `не отвечает`. Так сразу видно, где проблема, если синхронизация идёт долго.
 
-Во вкладке «Настройки» первым пунктом — переключение между текущим и прежним облаком (появляется после первой смены облака).
+Во вкладке «Настройки» первым пунктом — переключение между текущим и прежним облаком (появляется после первой смены облака). Там же:
+
+- **«Разделы»** — можно скрыть ромы и загрузку по ссылке, если ими не пользуетесь
+- **«Перенос настроек»** — «Экспорт» скачивает файл настроек, «Импорт» загружает его на другом устройстве. При импорте отмечается, что взять: сохранённые ссылки (добавляются к уже сохранённым), синхронизацию, исключения, системы ромов, разделы. Подключения к облаку и паролей в файле нет
+
+**Ярлык на телефоне:** в Chrome откройте веб-интерфейс, меню → «Добавить на главный экран» — появится значок Save Sync. Чтобы ярлык не сломался при смене IP-адреса, закрепите адрес устройства в роутере (резервирование DHCP).
 
 Веб-интерфейс принимает команды только со своей страницы: сторонний сайт, открытый в браузере, не сможет им управлять.
 
 ## Загрузка ромов по публичной ссылке
 
-Вставьте ссылку на папку или файл — Save Sync покажет, что внутри, а вы выберете нужное и систему, куда класть. Поддерживаются **Яндекс.Диск**, **pCloud**, **Nextcloud / ownCloud** (в том числе со ссылками на подпапки и с паролем) и **archive.org**.
+Вставьте ссылку на папку или файл — Save Sync покажет, что внутри, а вы выберете нужное и систему, куда класть. Поддерживаются **Яндекс.Диск**, **pCloud**, **Nextcloud / ownCloud** (в том числе со ссылками на подпапки и с паролем), **archive.org** и **прямые ссылки на файл** — ссылка на скачивание, скопированная с кнопки на сайте (например, на Boosty). Zip по прямой ссылке открывается как папка и как каталог игр, если сервер отдаёт файл частями; такие ссылки обычно временные, поэтому их нельзя сохранить.
 
 - Скачивать можно на устройство (в `roms/<система>`) или сразу в облако (`GameROMs/<система>`), ничего не занимая на карте
 - Из zip-архива можно выбрать отдельные файлы — читается только нужное, архив целиком качать не придётся
 - Скачанные `.zip` / `.7z` / `.rar` можно распаковать — на устройстве или прямо в облаке (для `.7z` и `.rar` нужна программа `7z`, `7zr`, `unrar` или `bsdtar`; на Recalbox обычно доступен только `.7z`)
 - Файлы, которые уже есть на устройстве (то же имя и размер в `roms/<система>`), отмечены «✓ на устройстве» прямо в списке и пропускаются, а прерванная загрузка докачивается при повторном запуске той же ссылки
 - Перед началом проверяется свободное место: считается только то, что действительно нужно докачать
-- Система выбирается автоматически по именам: архив `nes.zip`, папка `snes`, сборка archive.org `gb_drago557`. Выбранная вручную система не меняется
+- Система выбирается автоматически по именам: архив `nes.zip`, папка `snes`. Выбранная вручную система не меняется
 - Повторное открытие той же ссылки (в течение 10 минут) показывает список сразу, без нового запроса к сервису
+- Ссылку можно сохранить (☆) и потом открывать одним нажатием; если в этот момент открыт каталог, он сохраняется вместе со ссылкой. Ссылки хранятся в `sync.conf`, пароли не сохраняются — ссылка с паролем спросит его
+- Мелкие файлы (до 2 МБ: медиа каталога, небольшие ромы) скачиваются по три одновременно, большие файлы и архивы для распаковки — по одному
 
 Доступно в веб-интерфейсе и в центре управления (пункт «Скачать по публичной ссылке»).
 
 ## Каталог игр
 
-Если по ссылке лежит сборка игр с файлом `gamelist.xml` (список игр EmulationStation) — в папке или внутри большого zip-архива (как у сборок Скай и drago557 на archive.org и Яндекс.Диске) — в веб-интерфейсе появится кнопка **«Открыть как каталог»**.
+Если по ссылке лежит сборка игр с файлом `gamelist.xml` (список игр EmulationStation) — в папке или внутри большого zip-архива — в веб-интерфейсе появится кнопка **«Открыть как каталог»**.
 
-- Список игр с поиском, годом и размером; по нажатию на название — обложка, описание, жанр, число игроков
+- Три вида списка: **«Список»**, **«С обложками»** (год, размер, жанр, число игроков и начало описания) и **«Плитка»**. Обложки загружаются по мере прокрутки, браузер хранит их до 30 дней
+- Поиск, фильтры по жанру и числу игроков, «Нет на устройстве», сортировка по названию, году и размеру; «Выбранные» — проверить отмеченные игры перед скачиванием
+- По нажатию на игру — обложка, картинки сборки, видео, описание, жанр, число игроков; картинку можно открыть на весь экран и листать. Для игр, которые уже есть на устройстве, показываются свои обложки и описание (переключатель «С устройства / Из сборки»)
+- **«Заменить медиа»** и **«Заменить описание»** — обновить у игр на устройстве медиа и описание из сборки (по умолчанию свои данные не трогаются)
+- Сохранённый каталог открывается сразу из копии списка на карте, а обновления сборки проверяются в это время; новые игры отмечены «НОВОЕ», изменённые — «ОБНОВЛЕНО»
 - Выбор типов медиа (обложки, изображения, логотипы, видео и др.) с размером каждого типа; видео и руководства по умолчанию выключены, выбор запоминается
 - Скачиваются только отмеченные игры и только их медиа; многодисковые игры (`.m3u`, `.cue`, `.gdi`, `.ccd`) — вместе со всеми файлами образа
 - Записи игр добавляются в `roms/<система>/gamelist.xml`: игры сразу видны с обложками и описаниями, без скрапинга. Уже существующие записи не перезаписываются — дополняются только недостающие поля, а своё название, «избранное» и число запусков сохраняются
@@ -226,6 +237,8 @@ Recalbox:
 - `link_download.py` — загрузка по публичной ссылке и каталог игр
 - `sync.conf` — основной конфиг
 - `.sync_state`, `.sync_base.json` — состояние синхронизации (как выглядели сохранения при последней синхронизации)
+- `.sync_manifests/` — копии манифестов облака, чтобы не скачивать их после каждой игры
+- `.catalog_cache/` — списки игр сохранённых каталогов, для мгновенного открытия
 - `roms_filter_sync` — фильтр ромов
 - `bin/rclone` — сам rclone
 - `.config/rclone/rclone.conf` — конфиг облака (`rclone.conf.bak` — прежнее облако, к нему можно вернуться)
@@ -246,6 +259,7 @@ rm -f /userdata/system/download_sync.sh /userdata/system/upload_sync.sh \
       /userdata/system/scripts/save-sync.sh /userdata/system/logs/save_sync.log \
       /userdata/system/.config/rclone/rclone.conf /userdata/system/.config/rclone/rclone.conf.bak \
       /userdata/system/bin/rclone
+rm -rf /userdata/system/.sync_manifests /userdata/system/.catalog_cache
 sed -i '/download_sync.sh/d' /userdata/system/custom.sh 2>/dev/null
 ```
 
@@ -260,6 +274,7 @@ rm -f /recalbox/share/system/download_sync.sh /recalbox/share/system/upload_sync
       /recalbox/share/system/.config/rclone/rclone.conf /recalbox/share/system/.config/rclone/rclone.conf.bak \
       /recalbox/share/system/bin/rclone \
       "/recalbox/share/userscripts/save-sync[endgame].sh"
+rm -rf /recalbox/share/system/.sync_manifests /recalbox/share/system/.catalog_cache
 sed -i '/download_sync.sh/d' /recalbox/share/system/custom.sh 2>/dev/null
 sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 ```
@@ -338,7 +353,7 @@ sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 
 <h1 align="center">Save Sync</h1>
 
-![Version](https://img.shields.io/badge/version-1.4.8-blue)
+![Version](https://img.shields.io/badge/version-1.4.9-blue)
 ![Platform](https://img.shields.io/badge/platform-Batocera%20%7C%20KNULLI%20%7C%20Recalbox-orange)
 
 **EN** · [Русский выше ↑](#top)
@@ -360,7 +375,7 @@ Save on one device, turn on another, keep playing from where you left off. Runs 
 - Only the saves of systems whose ROMs are on the device are downloaded to it. For other systems the saves stay in the cloud and take no space on the device
 - PortMaster port saves sync automatically — only the saves themselves, not game data or screen settings
 - ROM copying and downloading — upload your collection to the cloud, or pull down ROMs (and whole systems) you don't have locally yet
-- Download ROMs from a public link (Yandex Disk, pCloud, Nextcloud / ownCloud, archive.org) — straight to the device or the cloud: pick individual files and folders, take just the games you want out of a zip, unpack .zip / .7z / .rar
+- Download ROMs from a public link (Yandex Disk, pCloud, Nextcloud / ownCloud, archive.org) or a direct link to a file — straight to the device or the cloud: pick individual files and folders, take just the games you want out of a zip, unpack .zip / .7z / .rar
 - **Game catalog**: a collection with a `gamelist.xml` can be opened as a catalog with covers and descriptions — pick games and media, and the games show up in the list with artwork right away, no scraping
 - No always-on device needed: your devices don't have to be online at the same time, and there's no dedicated server or NAS to run — just a regular cloud WebDAV account
 - Works with any number of devices, in any mix of systems
@@ -503,29 +518,40 @@ Save statistics are in the top bar: syncs without changes, with changes and with
 
 The cloud card shows the connected service, free space and state: `slow (12 s)` if the cloud answers slowly, `not responding` if it does not answer. So when a sync takes long, you see right away where the problem is.
 
-The first item of the "Settings" tab switches between the current and the previous cloud (it appears after the cloud has been changed once).
+The first item of the "Settings" tab switches between the current and the previous cloud (it appears after the cloud has been changed once). Also there:
+
+- **"Sections"** — ROMs and downloading from a link can be hidden if you do not use them
+- **"Moving the settings"** — "Export" downloads the settings file, "Import" loads it on another device. On import you choose what to take: saved links (added to the ones already there), sync, exclusions, ROM systems, sections. The cloud connection and passwords are not in the file
+
+**A shortcut on a phone:** open the web interface in Chrome, menu → "Add to Home screen" — a Save Sync icon appears. To keep the shortcut working when the IP address changes, reserve the device's address in your router (DHCP reservation).
 
 The web interface takes commands only from its own page: another website open in the browser cannot control it.
 
 ## Downloading ROMs from a public link
 
-Paste a link to a folder or a file — Save Sync shows what's inside, you pick what you need and the system to put it in. Supported: **Yandex Disk**, **pCloud**, **Nextcloud / ownCloud** (including sub-folder links and password-protected shares) and **archive.org**.
+Paste a link to a folder or a file — Save Sync shows what's inside, you pick what you need and the system to put it in. Supported: **Yandex Disk**, **pCloud**, **Nextcloud / ownCloud** (including sub-folder links and password-protected shares), **archive.org** and **direct links to a file** — a download link copied from a site's button (for example, on Boosty). A zip from a direct link opens like a folder and as a game catalog when the server gives the file in parts; such links are usually temporary, so they cannot be saved.
 
 - Download to the device (`roms/<system>`) or straight to the cloud (`GameROMs/<system>`), using no space on the card
 - Pick individual files from inside a zip — only what you chose is read, the whole archive doesn't have to be downloaded
 - Downloaded `.zip` / `.7z` / `.rar` can be unpacked — on the device or right in the cloud (`.7z` and `.rar` need `7z`, `7zr`, `unrar` or `bsdtar` on the system; on Recalbox usually only `.7z` is available)
 - Files already on the device (same name and size in `roms/<system>`) are marked "✓ on the device" right in the list and skipped, and an interrupted download resumes when you run the same link again
 - Free space is checked up front, counting only what actually still has to be downloaded
-- The system is picked automatically from the names: an archive `nes.zip`, a folder `snes`, an archive.org collection `gb_drago557`. A system chosen by hand is kept
+- The system is picked automatically from the names: an archive `nes.zip`, a folder `snes`. A system chosen by hand is kept
 - Opening the same link again (within 10 minutes) shows the list at once, without asking the service again
+- A link can be saved (☆) and opened later with one tap; if a catalog is open at that moment, it is saved with the link. Links are kept in `sync.conf`; passwords are not saved — a link with one asks for it
+- Small files (up to 2 MB: catalog media, small ROMs) are downloaded three at a time, big files and archives to unpack one by one
 
 Available in the web interface and in the control panel ("Download from a public link").
 
 ## Game catalog
 
-If a link holds a game collection with a `gamelist.xml` (EmulationStation games list) — in a folder or inside one big zip (like the Ckau and drago557 collections on archive.org and Yandex Disk) — the web interface shows an **"Open as a catalog"** button.
+If a link holds a game collection with a `gamelist.xml` (EmulationStation games list) — in a folder or inside one big zip — the web interface shows an **"Open as a catalog"** button.
 
-- Games list with search, year and size; tap a title for the cover, description, genre and number of players
+- Three list views: **"List"**, **"With covers"** (year, size, genre, number of players and the start of the description) and **"Tiles"**. Covers load as you scroll, the browser keeps them for up to 30 days
+- Search, filters by genre and number of players, "Not on the device", sorting by name, year and size; "Selected" — check the ticked games before downloading
+- Tap a game for the cover, the collection's pictures, video, description, genre and number of players; a picture opens on the whole screen and can be paged. Games already on the device show their own covers and description (the "From the device / From the collection" switch)
+- **"Replace media"** and **"Replace description"** — update the media and description of games on the device from the collection (by default the device's own data is left alone)
+- A saved catalog opens at once from a copy of the list on the card while the collection is checked for updates; new games are marked "NEW", changed ones "UPDATED"
 - Choose the media types (covers, images, logos, videos and more), with the size of each; videos and manuals are off by default, the choice is remembered
 - Only the ticked games and only their media are downloaded; multi-disc games (`.m3u`, `.cue`, `.gdi`, `.ccd`) come with all their image files
 - Game entries are added to `roms/<system>/gamelist.xml`: the games show up with covers and descriptions right away, no scraping. Existing entries are not overwritten — only missing fields are filled in, and your own name, "favorite" and play count are kept
@@ -558,6 +584,8 @@ Inside the device's system folder, the script creates:
 - `link_download.py` — download from a public link and the game catalog
 - `sync.conf` — main config
 - `.sync_state`, `.sync_base.json` — sync state (how the saves looked at the last sync)
+- `.sync_manifests/` — copies of the cloud manifests, so they are not downloaded after every game
+- `.catalog_cache/` — game lists of saved catalogs, for instant opening
 - `roms_filter_sync` — ROM filter
 - `bin/rclone` — rclone itself
 - `.config/rclone/rclone.conf` — cloud config (`rclone.conf.bak` — the previous cloud, you can switch back to it)
@@ -578,6 +606,7 @@ rm -f /userdata/system/download_sync.sh /userdata/system/upload_sync.sh \
       /userdata/system/scripts/save-sync.sh /userdata/system/logs/save_sync.log \
       /userdata/system/.config/rclone/rclone.conf /userdata/system/.config/rclone/rclone.conf.bak \
       /userdata/system/bin/rclone
+rm -rf /userdata/system/.sync_manifests /userdata/system/.catalog_cache
 sed -i '/download_sync.sh/d' /userdata/system/custom.sh 2>/dev/null
 ```
 
@@ -592,6 +621,7 @@ rm -f /recalbox/share/system/download_sync.sh /recalbox/share/system/upload_sync
       /recalbox/share/system/.config/rclone/rclone.conf /recalbox/share/system/.config/rclone/rclone.conf.bak \
       /recalbox/share/system/bin/rclone \
       "/recalbox/share/userscripts/save-sync[endgame].sh"
+rm -rf /recalbox/share/system/.sync_manifests /recalbox/share/system/.catalog_cache
 sed -i '/download_sync.sh/d' /recalbox/share/system/custom.sh 2>/dev/null
 sed -i '/install_sync.sh --web/d' /recalbox/share/system/custom.sh 2>/dev/null
 ```

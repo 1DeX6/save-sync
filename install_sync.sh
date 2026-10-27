@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ################################################
-# Save Sync Installer v1.4.8
+# Save Sync Installer v1.5.0
 # Облачная синхронизация сохранений и ромов
 # Batocera / KNULLI / Recalbox
 #
@@ -10,6 +10,7 @@
 #  install_sync.sh --info          - диагностика
 #  install_sync.sh --config   - центр управления
 #  install_sync.sh --web         - веб-интерфейс
+#  install_sync.sh --uninstall   - удаление
 ################################################
 
 # Очистка временных файлов при выходе
@@ -51,7 +52,9 @@ ROMS_SYNC_MEDIA="false"
 EXCLUDED_SYSTEMS=""
 LOG_ENABLED="true"
 LOG_LEVEL="info"
-LOG_KEEP_COUNT=3
+WEB_SHOW_ROMS="true"
+WEB_SHOW_LINK="true"
+WEB_LINKS=""
 
 # --- Переменные для облака ---
 REMOTE_NAME="cloud"
@@ -106,7 +109,7 @@ ensure_rclone_executable() {
 create_default_config() {
     cat > "$CONFIG_FILE" << 'EOF'
 # ========================================
-# Save Sync v1.4.8 - Главный конфиг
+# Save Sync v1.5.0 - Главный конфиг
 # ========================================
 
 # ── НАСТРОЙКИ СИНХРОНИЗАЦИИ ──
@@ -137,7 +140,12 @@ EXCLUDED_SYSTEMS=""
 LOG_ENABLED="true"
 MAX_LOG_SIZE="102400"
 LOG_LEVEL="info"
-LOG_KEEP_COUNT="3"
+
+# ── ВЕБ-ИНТЕРФЕЙС ──
+# Только для веб-интерфейса: какие разделы показывать (Настройки -> Разделы) и сохранённые ссылки
+WEB_SHOW_ROMS="true"
+WEB_SHOW_LINK="true"
+WEB_LINKS=""
 EOF
     chmod 644 "$CONFIG_FILE"
 }
@@ -402,7 +410,9 @@ load_config() {
                 LOG_ENABLED) LOG_ENABLED="$value" ;;
                 MAX_LOG_SIZE) MAX_LOG_SIZE="$value" ;;
                 LOG_LEVEL) LOG_LEVEL="$value" ;;
-                LOG_KEEP_COUNT) LOG_KEEP_COUNT="$value" ;;
+                WEB_SHOW_ROMS) WEB_SHOW_ROMS="$value" ;;
+                WEB_SHOW_LINK) WEB_SHOW_LINK="$value" ;;
+                WEB_LINKS) WEB_LINKS="$value" ;;
             esac
         done < "$CONFIG_FILE"
         case "$SYNC_MODE" in
@@ -421,7 +431,7 @@ load_config() {
 save_config() {
     cat > "$CONFIG_FILE" << EOF
 # ========================================
-# Save Sync v1.4.8 - Главный конфиг
+# Save Sync v1.5.0 - Главный конфиг
 # ========================================
 
 # ── НАСТРОЙКИ СИНХРОНИЗАЦИИ ──
@@ -441,7 +451,11 @@ EXCLUDED_SYSTEMS="$EXCLUDED_SYSTEMS"
 LOG_ENABLED="$LOG_ENABLED"
 MAX_LOG_SIZE="$MAX_LOG_SIZE"
 LOG_LEVEL="$LOG_LEVEL"
-LOG_KEEP_COUNT="$LOG_KEEP_COUNT"
+
+# ── ВЕБ-ИНТЕРФЕЙС ──
+WEB_SHOW_ROMS="${WEB_SHOW_ROMS:-true}"
+WEB_SHOW_LINK="${WEB_SHOW_LINK:-true}"
+WEB_LINKS="$WEB_LINKS"
 EOF
     chmod 644 "$CONFIG_FILE"
 }
@@ -771,26 +785,44 @@ detect_device() {
 detect_device
 
 # --- ИНИЦИАЛИЗАЦИЯ ВСЕХ ПУТЕЙ ПОСЛЕ ОПРЕДЕЛЕНИЯ СИСТЕМЫ ---
-CONFIG_FILE="$BASE/sync.conf"
+# Since 1.5.0 all files of Save Sync are in their own folder (APP_DIR). Older versions kept
+# them right in the system folder: such files are used as they are until "Update" moves them
+# (the web interface and the hooks keep working if the installer was only copied over).
+# Stay where they were: install_sync.sh itself, the log, the hook, the autostart lines.
+APP_DIR="$BASE/save_sync"
+LEGACY_LAYOUT=false
+if [ ! -f "$APP_DIR/download_sync.sh" ] && [ -f "$BASE/download_sync.sh" ]; then
+    LEGACY_LAYOUT=true
+fi
+set_paths() {
+    if [ "$LEGACY_LAYOUT" = true ]; then
+        DATA_DIR="$BASE"
+        CONFIG_DIR="$BASE/.config/rclone"
+    else
+        DATA_DIR="$APP_DIR"
+        CONFIG_DIR="$APP_DIR"
+    fi
+    CONFIG_FILE="$DATA_DIR/sync.conf"
+    BIN_DIR="$DATA_DIR/bin"
+    RCLONE_BIN="$BIN_DIR/rclone"
+    RCLONE_PATH="$RCLONE_BIN"
+    RCLONE_CONF="$CONFIG_DIR/rclone.conf"
+    DOWNLOAD_SCRIPT="$DATA_DIR/download_sync.sh"
+    UPLOAD_SCRIPT="$DATA_DIR/upload_sync.sh"
+    DOWNLOAD_ROMS="$DATA_DIR/download_roms.sh"
+    UPLOAD_ROMS="$DATA_DIR/upload_roms.sh"
+    ROMS_FILTER_FILE="$DATA_DIR/roms_filter_sync"
+    STATE_FILE="$DATA_DIR/.sync_state"
+    LINK_SCRIPT="$DATA_DIR/link_download.py"
+    ENGINE_SCRIPT="$DATA_DIR/sync_engine.py"
+}
+set_paths
 LOG_DIR="$BASE/logs"
 LOG_FILE="$LOG_DIR/save_sync.log"
 SCRIPT_DIR="$BASE/scripts"
-BIN_DIR="$BASE/bin"
-RCLONE_BIN="$BIN_DIR/rclone"
-RCLONE_PATH="$RCLONE_BIN"
-CONFIG_DIR="$BASE/.config/rclone"
-RCLONE_CONF="$CONFIG_DIR/rclone.conf"
-DOWNLOAD_SCRIPT="$BASE/download_sync.sh"
-UPLOAD_SCRIPT="$BASE/upload_sync.sh"
-DOWNLOAD_ROMS="$BASE/download_roms.sh"
-UPLOAD_ROMS="$BASE/upload_roms.sh"
-ROMS_FILTER_FILE="$BASE/roms_filter_sync"
 # Постоянное состояние синхронизации (переживает перезагрузку, в отличие от /tmp):
 # PENDING_UPLOAD=1 - сохранения на устройстве изменились, но ещё не выгружены
 # LAST_GOOD_SYNC=<unix-время> - когда устройство и облако последний раз совпадали
-STATE_FILE="$BASE/.sync_state"
-LINK_SCRIPT="$BASE/link_download.py"
-ENGINE_SCRIPT="$BASE/sync_engine.py"
 
 # --- ИНИЦИАЛИЗАЦИЯ ПЕРЕМЕННЫХ ОБЛАКА ---
 REMOTE_NAME="cloud"
@@ -979,6 +1011,7 @@ SYSTEM = "__SS_SYSTEM__"
 
 BASE_FILE = os.path.join(BASE_DIR, ".sync_base.json")
 MANIFEST = ".sync_manifest.json"
+MCACHE_DIR = os.path.join(BASE_DIR, ".sync_manifests")     # copies of the cloud manifests
 CONFLICTS = REMOTE.rstrip("/") + "_conflicts"
 PORTS_CLOUD = "_ports"
 PORTS_KEY = "PortMaster"                  # one exclusion entry for the saves of all ports
@@ -1036,6 +1069,7 @@ MSG = {
         "st_send": "Sending files: {n}", "st_recv": "Receiving files: {n}",
         "st_delete": "Deleting files: {n}", "st_finish": "Saving the sync state",
         "n_guard": "deletion stopped",
+        "manifest_failed": "The cloud manifest was not written - the next sync will be a full one",
         "n_failed": "not downloaded: {n}",
         "dl_failed": "Not downloaded (the cloud did not give the file, will try again next time): {rel}",
         "other_device": "another device",
@@ -1063,6 +1097,7 @@ MSG = {
         "st_send": "Отправка файлов: {n}", "st_recv": "Получение файлов: {n}",
         "st_delete": "Удаление файлов: {n}", "st_finish": "Сохранение состояния синхронизации",
         "n_guard": "удаление остановлено",
+        "manifest_failed": "Манифест в облаке не записан - следующая синхронизация будет полной",
         "n_failed": "не удалось скачать: {n}",
         "dl_failed": "Не удалось скачать (облако не отдало файл, попробую в следующий раз): {rel}",
         "other_device": "другого устройства",
@@ -1206,14 +1241,15 @@ def cloud_list(remote):
     return {i["Path"]: (i.get("Size", -1), i.get("ModTime", "")) for i in items}
 
 
-def refresh_listing(root, C, uploaded, deleted):
+def refresh_listing(root, C, uploaded, deleted, peek=None):
     """The cloud listing after our own changes: only the files we just sent are asked
     for again (a full listing of a big cloud folder takes long); if that does not
-    work out, the whole folder is listed again."""
+    work out, the whole folder is listed again. peek (a dict): gets the size and date of
+    the manifest from the same request."""
     C2 = {r: v for r, v in C.items() if r not in deleted}
     if uploaded:
         with tempfile.NamedTemporaryFile("w", delete=False, suffix=".list") as f:
-            f.write("\n".join(sorted(uploaded)) + "\n")
+            f.write("\n".join(sorted(uploaded) + ([MANIFEST] if peek is not None else [])) + "\n")
         try:
             rc, out = rclone(["lsjson", "-R", "--files-only", "--no-mimetype", "--files-from-raw", f.name, root.remote], check=False)
         finally:
@@ -1222,6 +1258,9 @@ def refresh_listing(root, C, uploaded, deleted):
             got = {i["Path"]: (i.get("Size", -1), i.get("ModTime", "")) for i in json.loads(out or "[]")} if rc == 0 else {}
         except (ValueError, KeyError, TypeError):
             got = {}
+        if peek is not None and rc == 0:
+            peek["st"] = mstat(got.pop(MANIFEST, None))
+            peek["ok"] = True
         if all(r in got for r in uploaded):
             for r in uploaded:
                 if root.accept(r, got[r][0]):
@@ -1231,6 +1270,89 @@ def refresh_listing(root, C, uploaded, deleted):
             return C2
         return {r: v for r, v in cloud_list(root.remote).items() if root.accept(r, v[0])}
     return C2
+
+
+# ---- copies of the cloud manifests on the card. Reading a manifest is the slowest part
+# of the quick sync (the whole file, for every folder, after every game); its size and
+# date are asked for all folders with one short request, and a manifest whose size and
+# date did not change is taken from the copy.
+def mstat(v):
+    """(size, date) of a listing entry in one form (JSON turns tuples into lists)."""
+    return [v[0], v[1]] if v and v[1] else None
+
+
+def manifest_stats(all_roots):
+    """{root name: [size, date]} of the manifests in the cloud (a folder without one is
+    left out), or None when the cloud did not answer."""
+    paths = {}
+    for root in all_roots:
+        if root.remote == REMOTE:
+            paths[MANIFEST] = root.name
+        elif root.remote.startswith(REMOTE + "/"):
+            paths[root.remote[len(REMOTE) + 1:] + "/" + MANIFEST] = root.name
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".list") as f:
+        f.write("\n".join(sorted(paths)) + "\n")
+    try:
+        rc, out = rclone(["lsjson", "-R", "--files-only", "--no-mimetype", "--files-from-raw", f.name, REMOTE], check=False)
+    finally:
+        os.remove(f.name)
+    if rc != 0:
+        return None
+    try:
+        got = {i["Path"]: (i.get("Size", -1), i.get("ModTime", "")) for i in json.loads(out or "[]")}
+    except (ValueError, KeyError, TypeError):
+        return None
+    return {name: mstat(got[path]) for path, name in paths.items() if path in got}
+
+
+def one_manifest_stat(root):
+    """[size, date] of the manifest of one folder; None = no manifest; False = no answer."""
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".list") as f:
+        f.write(MANIFEST + "\n")
+    try:
+        rc, out = rclone(["lsjson", "-R", "--files-only", "--no-mimetype", "--files-from-raw", f.name, root.remote], check=False)
+    finally:
+        os.remove(f.name)
+    if rc != 0:
+        return False
+    try:
+        got = {i["Path"]: (i.get("Size", -1), i.get("ModTime", "")) for i in json.loads(out or "[]")}
+    except (ValueError, KeyError, TypeError):
+        return False
+    return mstat(got.get(MANIFEST))
+
+
+def mcache_path(root):
+    return os.path.join(MCACHE_DIR, hashlib.md5(root.name.encode("utf-8")).hexdigest()[:12] + ".json")
+
+
+def mcache_get(root, st):
+    """The copy of the manifest if the cloud shows the same size and date as when it was taken."""
+    if not st:
+        return None
+    c = load_json(mcache_path(root), None)
+    if isinstance(c, dict) and c.get("root") == root.name and c.get("remote") == root.remote and c.get("st") == st and isinstance(c.get("m"), str):
+        return c["m"]
+    return None
+
+
+def mcache_put(root, st, text):
+    """Keeps the manifest text with the size and date the cloud showed for it (no date: dropped)."""
+    try:
+        if not st:
+            mcache_drop(root)
+            return
+        os.makedirs(MCACHE_DIR, exist_ok=True)
+        save_json(mcache_path(root), {"root": root.name, "remote": root.remote, "st": st, "m": text})
+    except OSError:
+        pass
+
+
+def mcache_drop(root):
+    try:
+        os.remove(mcache_path(root))
+    except OSError:
+        pass
 
 
 def cloud_list_files(root, rels):
@@ -1539,12 +1661,30 @@ def _local_list(root, base):
     return out
 
 
+def write_manifest(remote, data):
+    """-> True when the manifest is in the cloud. A failed write is remembered in the base
+    (manifest_pending): the other devices learn about changes from the manifest, so the
+    next sync here is a full one and writes it again."""
+    try:
+        r = subprocess.run(rclone_cmd(["rcat", remote + "/" + MANIFEST]), input=data,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=600)
+        ok = r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        ok = False
+    if not ok:
+        log(t("manifest_failed"))
+    return ok
+
+
 def unchanged_here():
     """True when nothing on this device changed since the last good sync: the same saves,
     with the same size and modification time as in the base (a file whose time differs is
     read and compared by content). Looks at the local disk only - no cloud, no manifest.
     Any doubt gives False, and then the normal sync runs."""
-    base_roots = load_json(BASE_FILE, {}).get("roots")
+    base_all = load_json(BASE_FILE, {})
+    if base_all.get("manifest_pending"):
+        return False                    # the manifest was not written last time: sync again
+    base_roots = base_all.get("roots")
     if not isinstance(base_roots, dict) or not base_roots:
         return False                    # no successful sync yet
     now = time.time()
@@ -1645,14 +1785,29 @@ def run(fast=False):
     # changed here (a file is deleted here only when the cloud confirms it is gone).
     # Anything unusual - first sync, a folder without a manifest - gives the full sync.
     manifest_reads = None
+    manifest_failed = False
+    mread = {}          # root name -> [size, date] of the manifest that was read (when known)
     if fast:
-        if not base_roots:
-            fast = False
+        if not base_roots or base_all.get("manifest_pending"):
+            fast = False                # a manifest not written last time is written by a full sync
         else:
+            stats = manifest_stats(all_roots)
+
             def read_any_manifest(root):
                 if not base_roots.get(root.name):
                     return 1, ""        # nothing synced in this folder yet: new saves there come with the full sync
-                return rclone(["cat", root.remote + "/" + MANIFEST], check=False)
+                st = stats.get(root.name) if stats is not None else None
+                text = mcache_get(root, st)
+                if text is not None:
+                    mread[root.name] = st
+                    return 0, text      # not changed since it was read or written here
+                rc_m, out_m = rclone(["cat", root.remote + "/" + MANIFEST], check=False)
+                if rc_m == 0 and st:
+                    # the size and date were asked before reading: if another device wrote in
+                    # between, the next sync sees another date and reads it again
+                    mcache_put(root, st, out_m)
+                    mread[root.name] = st
+                return rc_m, out_m
             if len(all_roots) > 1:
                 with ThreadPoolExecutor(max_workers=4) as pool:
                     manifest_reads = dict(zip([r.name for r in all_roots], pool.map(read_any_manifest, all_roots)))
@@ -1676,7 +1831,17 @@ def run(fast=False):
 
     def read_manifest(root):
         if MANIFEST in listings[root.name]:
-            return rclone(["cat", root.remote + "/" + MANIFEST], check=False)
+            st = mstat(listings[root.name][MANIFEST])
+            text = mcache_get(root, st)
+            if text is not None:
+                mread[root.name] = st
+                return 0, text
+            rc_m, out_m = rclone(["cat", root.remote + "/" + MANIFEST], check=False)
+            if rc_m == 0 and st:
+                mcache_put(root, st, out_m)
+                mread[root.name] = st
+            return rc_m, out_m
+        mcache_drop(root)
         return 1, ""                    # the listing shows there is no manifest yet
 
     if fast:
@@ -2002,7 +2167,8 @@ def run(fast=False):
         moved_to = {d for _, d in renamed} | {d for _, d in copied}
         moved_from = {s for s, _ in renamed}
         changed_cloud = bool(up or won_local or del_cloud or renamed or copied)
-        C2 = refresh_listing(root, C, set(up) | set(won_local) | moved_to, set(del_cloud) | moved_from) if changed_cloud else C
+        peek = {}
+        C2 = refresh_listing(root, C, set(up) | set(won_local) | moved_to, set(del_cloud) | moved_from, peek) if changed_cloud else C
         L2 = local_list(root, base)
         nb = {}
         for rel in set(same) | done:
@@ -2058,24 +2224,41 @@ def run(fast=False):
         fresh = M
         newM = build_manifest(fresh)
         if newM != fresh:
-            rc, mout = rclone(["cat", root.remote + "/" + MANIFEST], check=False)
-            try:
-                fresh = json.loads(mout).get("files", {}) if rc == 0 and mout.strip() else {}
-            except (ValueError, AttributeError):
-                fresh = {}
-            newM = build_manifest(fresh)
+            # read again only when the manifest changed since it was read (its size and date
+            # now: from the listing above, or asked); unknown -> read again, as before
+            same_st = False
+            if mread.get(root.name):
+                st_now = peek.get("st") if peek.get("ok") else one_manifest_stat(root)
+                same_st = st_now == mread[root.name]
+            if not same_st:
+                rc, mout = rclone(["cat", root.remote + "/" + MANIFEST], check=False)
+                try:
+                    fresh = json.loads(mout).get("files", {}) if rc == 0 and mout.strip() else {}
+                except (ValueError, AttributeError):
+                    fresh = {}
+                newM = build_manifest(fresh)
         if newM != fresh:
             data = json.dumps({"version": 1, "files": newM}, ensure_ascii=False, separators=(",", ":")).encode()
             t0 = time.monotonic()
             stage("finish")
-            subprocess.run(rclone_cmd(["rcat", root.remote + "/" + MANIFEST]), input=data,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            mcache_drop(root)
+            written = write_manifest(root.remote, data)
+            if not written:
+                manifest_failed = True
             if TIMING:
                 timed("rcat", t0)
-            # a failed manifest write is harmless: it is only a hint for the other devices
+            if written:
+                # its size and date as the cloud shows them: the next sync takes it from the copy
+                st_new = one_manifest_stat(root)
+                if st_new and st_new[0] == len(data):
+                    mcache_put(root, st_new, data.decode("utf-8"))
 
     base_all["roots"] = new_base_roots
     base_all["device"] = dev
+    if manifest_failed:
+        base_all["manifest_pending"] = True
+    else:
+        base_all.pop("manifest_pending", None)
     save_json(BASE_FILE, base_all)
 
     # old conflict copies are removed by any device during its sync (at most once
@@ -2116,6 +2299,7 @@ def run_mirror():
     for (and excluded ones) are not touched. Afterwards the memory says: cloud = device."""
     dev = device_name()
     new_base_roots = {}
+    manifest_failed = False
     total = {"u": 0, "x": 0}
     for root in roots():
         L = local_list(root, {})
@@ -2172,9 +2356,12 @@ def run_mirror():
         if newM != M:
             data = json.dumps({"version": 1, "files": newM}, ensure_ascii=False, separators=(",", ":")).encode()
             stage("finish")
-            subprocess.run(rclone_cmd(["rcat", root.remote + "/" + MANIFEST]), input=data,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    save_json(BASE_FILE, {"roots": new_base_roots, "device": dev})
+            if not write_manifest(root.remote, data):
+                manifest_failed = True
+    new_base = {"roots": new_base_roots, "device": dev}
+    if manifest_failed:
+        new_base["manifest_pending"] = True
+    save_json(BASE_FILE, new_base)
     parts = [t(k, n=total[v]) for k, v in (("n_sent", "u"), ("n_del", "x")) if total[v]]
     res = os.environ.get("SS_RESULT")
     if res:
@@ -2491,7 +2678,7 @@ ENGEOF
         -e "s|__SS_SAVE_DIR__|$SAVE_DIR|g" \
         -e "s|__SS_ROMS_DIR__|$ROMS_DIR|g" \
         -e "s|__SS_REMOTE__|$REMOTE|g" \
-        -e "s|__SS_BASE__|$BASE|g" \
+        -e "s|__SS_BASE__|$DATA_DIR|g" \
         -e "s|__SS_LOG_FILE__|$LOG_FILE|g" \
         -e "s|__SS_RCLONE_CONF__|$RCLONE_CONF|g" \
         -e "s|__SS_STATE_FILE__|$STATE_FILE|g" \
@@ -3593,6 +3780,13 @@ RETRIES = 3
 NO_SPACE = {"hit": False}      # set when a download stopped for lack of space
 CHUNK = 256 * 1024
 TIMEOUT = 60
+# A picture or video of the catalog is asked quickly: a service that hangs must not keep
+# the page waiting for minutes. Set per thread by CatalogSession.media.
+QUICK_TIMEOUT = 15
+# a cover in the catalog list: the service's preview fits this box (bigger pictures are not needed)
+CAT_THUMB_W, CAT_THUMB_H = 240, 320
+CAT_THUMB_MAX = 1024 * 1024
+_NET = threading.local()
 
 # ============================================================== messages
 MSG = {
@@ -3691,7 +3885,9 @@ MSG = {
         "log_error": "Link download error: {err}",
         "phase": "Downloading from link",
         "svc_yandex": "Yandex Disk", "svc_pcloud": "pCloud", "svc_nextcloud": "Nextcloud",
-        "svc_archive": "archive.org",
+        "svc_archive": "archive.org", "svc_direct": "Direct link",
+        "direct_page": "❌ The link opens a web page, not a file. Paste a direct link to the file (for example, copied from the download button) or a Yandex Disk, pCloud, Nextcloud or archive.org link.",
+        "direct_denied": "❌ The server did not give the file: the link has expired or needs a login. Copy the download link again.",
         "restricted": "❌ This archive.org item is restricted: it can only be downloaded after logging in on archive.org.",
         "cancelled_web": "Download cancelled",
         "running_other": "⏳ A link download is already running{pct} (PID {pid}).",
@@ -3798,7 +3994,9 @@ MSG = {
         "log_error": "Ошибка загрузки по ссылке: {err}",
         "phase": "Загрузка по ссылке",
         "svc_yandex": "Яндекс.Диск", "svc_pcloud": "pCloud", "svc_nextcloud": "Nextcloud",
-        "svc_archive": "archive.org",
+        "svc_archive": "archive.org", "svc_direct": "Прямая ссылка",
+        "direct_page": "❌ По ссылке открывается страница, а не файл. Вставьте прямую ссылку на файл (например, скопированную с кнопки скачивания) или ссылку Яндекс.Диска, pCloud, Nextcloud, archive.org.",
+        "direct_denied": "❌ Сервер не отдал файл: ссылка истекла или нужен вход. Скопируйте ссылку на скачивание заново.",
         "restricted": "❌ Этот архив на archive.org закрыт: скачать его можно только после входа на archive.org.",
         "cancelled_web": "Загрузка отменена",
         "running_other": "⏳ Уже идёт загрузка по ссылке{pct} (PID {pid}).",
@@ -3976,20 +4174,26 @@ def open_url(url, headers=None, method="GET", data=None, timeout=TIMEOUT):
     hdrs = {"User-Agent": USER_AGENT}
     hdrs.update(headers or {})
     last = None
-    for attempt in range(RETRIES + 1):
+    # quick (catalog pictures): short wait and one retry, only after a dropped connection
+    quick = getattr(_NET, "quick", False)
+    tries = 1 if quick else RETRIES
+    if quick:
+        timeout = min(timeout, QUICK_TIMEOUT)
+    for attempt in range(tries + 1):
         req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
         try:
             return urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX)
         except urllib.error.HTTPError as e:
-            if e.code in (429, 500, 502, 503, 504) and attempt < RETRIES:
+            if e.code in (429, 500, 502, 503, 504) and attempt < tries:
                 last = e
-                time.sleep(2 + attempt * 4)
+                time.sleep(1 if quick else 2 + attempt * 4)
                 continue
             raise
         except (urllib.error.URLError, socket.timeout, ConnectionError) as e:
             last = e
-            if attempt < RETRIES:
-                time.sleep(2 + attempt * 4)
+            timed_out = isinstance(e, socket.timeout) or isinstance(getattr(e, "reason", None), socket.timeout)
+            if attempt < tries and not (quick and timed_out):
+                time.sleep(1 if quick else 2 + attempt * 4)
                 continue
             raise LinkError(t("net_error", err=getattr(e, "reason", e)))
     raise LinkError(t("net_error", err=last))
@@ -4311,7 +4515,8 @@ class YandexSource:
         self.single_file = False
 
     def _call(self, path, offset):
-        q = {"public_key": self.public_key, "limit": 200, "offset": offset}
+        q = {"public_key": self.public_key, "limit": 200, "offset": offset,
+             "preview_size": "%dx" % CAT_THUMB_W, "preview_crop": "false"}
         if path:
             q["path"] = path
         try:
@@ -4343,6 +4548,7 @@ class YandexSource:
                     self._fill(child, self._call(it.get("path"), 0), scan)
                 else:
                     child = Entry(it.get("name"), False, it.get("size"), it.get("path"))
+                    child.preview = it.get("preview")
                 entry.children.append(child)
             offset += len(items)
             if not items or offset >= int(emb.get("total") or 0):
@@ -4358,6 +4564,11 @@ class YandexSource:
         except urllib.error.HTTPError as e:
             raise LinkError(_yandex_err(e))
         return r["href"], {}
+
+
+    def thumb_request(self, entry):
+        url = getattr(entry, "preview", None)
+        return (url, {}) if url else None
 
 
 def _yandex_err(e):
@@ -4434,6 +4645,15 @@ class PCloudSource:
             raise LinkError("%s (%s)" % (self.ERRORS.get(code, res.get("error", "")), code))
         return "%s://%s%s" % (PCLOUD_DL_SCHEME, res["hosts"][0], res["path"]), {}
 
+    def thumb_request(self, entry):
+        if self.single_file or not entry.ref:
+            return None
+        res = self._call(self.api, "getpubthumblink", fileid=entry.ref,
+                         size="%dx%d" % (CAT_THUMB_W, CAT_THUMB_H))
+        if res.get("result") != 0 or not res.get("hosts"):
+            return None
+        return "%s://%s%s" % (PCLOUD_DL_SCHEME, res["hosts"][0], res["path"]), {}
+
 
 # ============================================================== Nextcloud / ownCloud
 class NextcloudSource:
@@ -4451,6 +4671,7 @@ class NextcloudSource:
         m = self.PATH_RE.match(u.path)
         base = "%s://%s%s" % (u.scheme, u.netloc, m.group(1))
         self.token = m.group(2)
+        self.base = base
         self.sub = urllib.parse.parse_qs(u.query).get("path", [""])[0].strip("/")
         self.password = password
         # Nextcloud 29+ first, then the older endpoint (older Nextcloud, ownCloud 10)
@@ -4575,6 +4796,13 @@ class NextcloudSource:
             url += "/" + urllib.parse.quote(entry.ref)
         return url, self._auth(self.endpoint[1])
 
+    def thumb_request(self, entry):
+        if self.password or self.single_file or not entry.ref:
+            return None
+        q = urllib.parse.urlencode({"file": "/" + entry.ref, "x": CAT_THUMB_W, "y": CAT_THUMB_H, "a": 1})
+        return (self.base + "/index.php/apps/files_sharing/publicpreview/" + self.token + "?" + q,
+                {"X-Requested-With": "XMLHttpRequest"})
+
 
 # ============================================================== archive.org
 class ArchiveSource:
@@ -4656,7 +4884,68 @@ def _int(v):
         return None
 
 
-SOURCES = (YandexSource, PCloudSource, NextcloudSource, ArchiveSource)
+# ============================================================== a direct link to a file
+class DirectSource:
+    """Any other http(s) link: a direct link to one file (a signed CDN link copied from a
+    download button, e.g. Boosty). Checked with one small request: a web page is refused."""
+    title = t("svc_direct")
+    direct = True
+
+    @classmethod
+    def match(cls, u):
+        return True
+
+    def __init__(self, url, password=None):
+        self.url = url
+        self.single_file = False
+
+    @staticmethod
+    def _file_name(cd, url):
+        m = re.search(r"filename\*\s*=\s*[^']*'[^']*'([^;]+)", cd or "", re.I)
+        if m:
+            return urllib.parse.unquote(m.group(1).strip().strip('"'))
+        m = re.search(r'filename\s*=\s*"([^"]+)"', cd or "", re.I) or re.search(r"filename\s*=\s*([^;]+)", cd or "", re.I)
+        if m:
+            return m.group(1).strip()
+        return urllib.parse.unquote(urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1])
+
+    def load(self, scan):
+        try:
+            with open_url(self.url, {"Range": "bytes=0-3"}) as resp:
+                status = getattr(resp, "status", 200)
+                ctype = (resp.headers.get("Content-Type") or "").lower()
+                cd = resp.headers.get("Content-Disposition") or ""
+                crange = resp.headers.get("Content-Range") or ""
+                clen = resp.headers.get("Content-Length") or ""
+                final = resp.geturl() or self.url
+                head = resp.read(4)
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 410):
+                raise LinkError(t("not_found"))
+            if e.code in (401, 403):
+                raise LinkError(t("direct_denied"))
+            raise LinkError(t("api_error", err="HTTP %d" % e.code))
+        if "text/html" in ctype or head[:1] == b"<":
+            raise LinkError(t("direct_page"))
+        size = None
+        m = re.search(r"/(\d+)\s*$", crange)
+        if status == 206 and m:
+            size = int(m.group(1))
+        elif status == 200 and clen.isdigit():
+            size = int(clen)
+        name = safe_name(self._file_name(cd, final))
+        if "." not in name and head == b"PK\x03\x04":
+            name += ".zip"                      # a link without a file name: a zip by its bytes
+        scan.add()
+        root = Entry(urllib.parse.urlsplit(final).hostname or "", True, ref="")
+        root.children.append(Entry(name, False, size, self.url))
+        return root
+
+    def download_request(self, entry):
+        return entry.ref or self.url, {}
+
+
+SOURCES = (YandexSource, PCloudSource, NextcloudSource, ArchiveSource, DirectSource)
 
 
 def make_source(url, password=None):
@@ -4738,6 +5027,7 @@ def free_bytes(path):
 
 class Progress:
     def __init__(self, total_bytes, total_files, web, quiet):
+        self.lock = threading.RLock()     # small files are fetched by several threads
         self.total = max(total_bytes, 1)
         self.files = total_files
         self.done = 0
@@ -4755,17 +5045,18 @@ class Progress:
         return pct, speed, eta
 
     def update(self, n=0, force=False):
-        self.done += n
-        now = time.time()
-        if not force and now - self.last < 0.5:
-            return
-        self.last = now
-        pct, speed, eta = self._stats()
-        if not self.quiet:
-            con(t("progress", pct=pct, done=human(self.done), total=human(self.total),
-                  speed=human(speed), eta="%02d:%02d" % (eta // 60, eta % 60)), droppable=True)
-        if self.web:
-            write_progress(True, pct, self.done, self.total, speed, eta, self.file_i, self.files)
+        with self.lock:
+            self.done += n
+            now = time.time()
+            if not force and now - self.last < 0.5:
+                return
+            self.last = now
+            pct, speed, eta = self._stats()
+            if not self.quiet:
+                con(t("progress", pct=pct, done=human(self.done), total=human(self.total),
+                      speed=human(speed), eta="%02d:%02d" % (eta // 60, eta % 60)), droppable=True)
+            if self.web:
+                write_progress(True, pct, self.done, self.total, speed, eta, self.file_i, self.files)
 
     def finish(self, ok, phase=None):
         pct, speed, eta = self._stats()
@@ -4776,6 +5067,9 @@ class Progress:
                            self.file_i, self.files, success=ok, phase=phase)
 
 
+_PROG_LOCK = threading.Lock()
+
+
 def write_progress(active, pct, done, total, speed, eta, i, n, success=None, phase=None):
     d = {"active": active, "action": "link_download", "phase": phase or t("phase"), "percent": pct,
          "bytes": done, "totalBytes": total, "speed": int(speed), "eta": eta,
@@ -4783,10 +5077,11 @@ def write_progress(active, pct, done, total, speed, eta, i, n, success=None, pha
     if success is not None:
         d["success"] = success
     try:
-        tmp = PROGRESS_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(d, f)
-        os.replace(tmp, PROGRESS_FILE)
+        with _PROG_LOCK:
+            tmp = PROGRESS_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(d, f)
+            os.replace(tmp, PROGRESS_FILE)
     except OSError:
         pass
 
@@ -4879,7 +5174,7 @@ def download_member(src, entry, path, progress):
                 _rm(tmp)
                 raise LinkError(str(e))
             last = e
-        progress.done -= got
+        progress.update(-got)
         _rm(tmp)
         if attempt < RETRIES:
             time.sleep(3 + attempt * 5)
@@ -5139,6 +5434,7 @@ def upload_stream(src, entry, remote_path, progress):
             if entry.size is not None:
                 cmd += ["--size", str(entry.size)]
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=errf)
+            _LIVE_PROCS.add(proc)
             with resp:
                 while True:
                     chunk = resp.read(CHUNK)
@@ -5164,12 +5460,16 @@ def upload_stream(src, entry, remote_path, progress):
             if isinstance(e, LinkError) and str(e) in (t("zip_method"), t("zip_no_range")):
                 raise
             last = e
-            progress.done -= sent      # this attempt's bytes are sent again
+            progress.update(-sent)     # this attempt's bytes are sent again
             if attempt < RETRIES:
                 time.sleep(3 + attempt * 5)
         finally:
+            _LIVE_PROCS.discard(proc)
             errf.close()
     raise LinkError(str(getattr(last, "reason", last)))
+
+
+_LIVE_PROCS = set()
 
 
 def _kill(proc):
@@ -5352,6 +5652,135 @@ def resolve_dest(target, name):
     return CloudDest(exact[0]) if target == "cloud" else DeviceDest(exact[0])
 
 
+# ============================================================== small files several at a time
+# Media of a catalog and other small files spend more time on the request than on the
+# bytes, so up to PAR_WORKERS of them are fetched at once. Big files and archives that
+# are unpacked stay one by one (as before), so the speed of a big file is not shared.
+PAR_MAX = 2 * 1024 * 1024
+PAR_WORKERS = 3
+
+
+def par_ok(dest, entry, target):
+    if entry.is_dir or entry.size is None or entry.size > PAR_MAX:
+        return False
+    kind = arc_kind(entry)
+    if kind and kind in getattr(dest, "unpack", ()):
+        return False
+    if target in getattr(dest, "present", {}):
+        return False
+    if entry.zip_file is not None:
+        info = entry.ref
+        # a file inside a zip is read with one request of its own (the shared archive
+        # object reads one file at a time): only plain and deflate files, as zip tools make
+        if (not isinstance(info, zipfile.ZipInfo) or info.compress_type not in (0, 8)
+                or info.flag_bits & 1 or entry.zip_file.size is None):
+            return False
+    return True
+
+
+class _FileProgress:
+    """The progress of one file of a parallel batch: counts its own bytes, stops on Cancel."""
+    def __init__(self, main, stop):
+        self.main, self.stop, self.n = main, stop, 0
+
+    def update(self, n=0, force=False):
+        if self.stop.is_set():
+            raise KeyboardInterrupt
+        self.n += n
+        self.main.update(n, force)
+
+
+class _ZipUrls:
+    """One link per archive for all its small files (Yandex Disk and pCloud give a link with
+    an API request), asked again after a failure: links expire."""
+    def __init__(self, src):
+        self.src, self.lock, self.urls = src, threading.Lock(), {}
+
+    def get(self, zentry, fresh=False):
+        with self.lock:
+            key = id(zentry)
+            if fresh or key not in self.urls:
+                self.urls[key] = self.src.download_request(zentry)
+            return self.urls[key]
+
+
+def member_small(zurls, entry):
+    """A small file inside a zip with one Range request, unpacked in memory."""
+    last = None
+    for attempt in range(RETRIES + 1):
+        try:
+            url, headers = zurls.get(entry.zip_file, fresh=attempt > 0)
+            data, _final = cat_zip_member(url, headers, entry.zip_file.size, entry.ref)
+            return data
+        except KeyboardInterrupt:
+            raise
+        except LinkError as e:
+            if str(e) == t("zip_no_range"):
+                raise
+            last = e
+        except (zlib.error, urllib.error.URLError, socket.timeout, ConnectionError, OSError) as e:
+            last = e
+        if attempt < RETRIES:
+            time.sleep(3 + attempt * 5)
+    raise LinkError(str(getattr(last, "reason", last)))
+
+
+def rcat_bytes(data, remote_path):
+    rb = rclone_bin()
+    proc = None
+    errf = tempfile.TemporaryFile()
+    try:
+        proc = subprocess.Popen([rb, "--config", RCLONE_CONF, "rcat", "--size", str(len(data)), remote_path],
+                                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=errf)
+        _LIVE_PROCS.add(proc)
+        proc.stdin.write(data)
+        proc.stdin.close()
+        rc = proc.wait(timeout=1800)
+        if rc != 0:
+            errf.seek(0)
+            raise LinkError("rclone: " + _last_line(errf.read().decode("utf-8", "replace")))
+    except (OSError, subprocess.SubprocessError) as e:
+        _kill(proc)
+        raise LinkError(str(e))
+    finally:
+        _LIVE_PROCS.discard(proc)
+        errf.close()
+
+
+def par_transfer(src, dest, entry, target, fp, zurls):
+    if entry.zip_file is None:
+        dest.transfer(src, entry, target, fp)
+        return
+    data = member_small(zurls, entry)
+    if fp.stop.is_set():
+        raise KeyboardInterrupt
+    if dest.kind == "cloud":
+        last = None
+        for attempt in range(RETRIES + 1):
+            try:
+                rcat_bytes(data, target)
+                break
+            except LinkError as e:
+                last = e
+                if attempt < RETRIES:
+                    time.sleep(3 + attempt * 5)
+        else:
+            raise last
+    else:
+        tmp = target + ".unzip"
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, target)
+        except OSError as e:
+            _rm(tmp)
+            if e.errno == errno.ENOSPC:
+                NO_SPACE["hit"] = True
+            raise LinkError(str(e))
+    fp.update(len(data))
+
+
 def run_download(src, plan, dest, url, web=False, quiet=False, confirm=None, start=None, before_reload=None):
     """Returns process exit code."""
     # before start() the lock is not ours: do not touch another download's progress
@@ -5395,8 +5824,100 @@ def run_download(src, plan, dest, url, web=False, quiet=False, confirm=None, sta
     log(t("log_start", service=src.title, url=url, dest=dest.label))
     progress = Progress(need, len(todo), web, quiet)
     ok = fail = streak = 0
+    stop = threading.Event()
+    zurls = _ZipUrls(src)
+    state = {"ok": 0, "fail": 0, "streak": 0, "halt": False}
+
+    def file_failed(rel, e):
+        con("\n" + t("file_failed", path=rel, err=e) + "\n")
+        log(t("log_error", err="%s: %s" % (rel, e)))
+
+    def run_batch(batch):
+        """batch: [(i, entry, rel, target)] of small files -> fetched PAR_WORKERS at a time.
+        The results are counted like the one-by-one loop does (3 failures in a row stop)."""
+        jobs = list(batch)
+        jlock = threading.Lock()
+        results = []          # (i, rel, error or None), in the order they finish
+        rcond = threading.Condition()
+
+        def worker():
+            while not stop.is_set():
+                with jlock:
+                    if not jobs or state["halt"]:
+                        return
+                    i, entry, rel, target = jobs.pop(0)
+                    progress.file_i = max(progress.file_i, i)
+                if not quiet:
+                    con("\r" + " " * 70 + "\r" + t("file_start", i=i, n=len(todo), path=rel) + "\n")
+                had = dest.already(target)
+                fp = _FileProgress(progress, stop)
+                err = None
+                try:
+                    par_transfer(src, dest, entry, target, fp, zurls)
+                    # a restarted transfer re-reads bytes: count this file exactly once
+                    progress.update(max(0, entry.size - had) - fp.n)
+                except KeyboardInterrupt:
+                    return
+                except LinkError as e:
+                    err = e
+                except Exception as e:            # never leave the batch waiting for a dead thread
+                    err = LinkError(str(e))
+                with rcond:
+                    results.append((i, rel, err))
+                    rcond.notify()
+
+        threads = [threading.Thread(target=worker, daemon=True) for _ in range(min(PAR_WORKERS, len(jobs)))]
+        for th in threads:
+            th.start()
+        seen = 0
+        try:
+            while True:
+                with rcond:
+                    while seen < len(results):
+                        _i, rel, err = results[seen]
+                        seen += 1
+                        if err is None:
+                            state["ok"] += 1
+                            state["streak"] = 0
+                        else:
+                            state["fail"] += 1
+                            state["streak"] += 1
+                            file_failed(rel, err)
+                            if "No space" in str(err) or NO_SPACE["hit"] or state["streak"] >= 3:
+                                if state["streak"] >= 3 and not state["halt"]:
+                                    con(t("too_many_fail") + "\n")
+                                state["halt"] = True
+                    if not any(th.is_alive() for th in threads) and seen >= len(results):
+                        break
+                    rcond.wait(0.3)     # short waits: "Cancel" (SIGTERM) is handled in this thread
+                progress.update(0, force=True)
+        except KeyboardInterrupt:
+            stop.set()
+            for proc in list(_LIVE_PROCS):
+                _kill(proc)
+            end = time.time() + 5
+            for th in threads:
+                th.join(max(0.1, end - time.time()))
+            raise
+
     try:
-        for i, (entry, rel, target) in enumerate(todo, 1):
+        i = 0
+        while i < len(todo):
+            entry, rel, target = todo[i]
+            if par_ok(dest, entry, target):
+                batch = []
+                while i < len(todo) and par_ok(dest, todo[i][0], todo[i][2]):
+                    batch.append((i + 1,) + tuple(todo[i]))
+                    i += 1
+                if len(batch) > 1:
+                    state.update(ok=ok, fail=fail, streak=streak)
+                    run_batch(batch)
+                    ok, fail, streak = state["ok"], state["fail"], state["streak"]
+                    if state["halt"]:
+                        break
+                    continue
+                i -= 1          # a single small file: as before
+            i += 1
             progress.file_i = i
             if not quiet:
                 con("\r" + " " * 70 + "\r" + t("file_start", i=i, n=len(todo), path=rel) + "\n")
@@ -5448,8 +5969,7 @@ def run_download(src, plan, dest, url, web=False, quiet=False, confirm=None, sta
             except LinkError as e:
                 fail += 1
                 streak += 1
-                con("\n" + t("file_failed", path=rel, err=e) + "\n")
-                log(t("log_error", err="%s: %s" % (rel, e)))
+                file_failed(rel, e)
                 if "No space" in str(e) or streak >= 3:
                     if streak >= 3:
                         con(t("too_many_fail") + "\n")
@@ -5487,6 +6007,8 @@ def run_download(src, plan, dest, url, web=False, quiet=False, confirm=None, sta
 CAT_MEDIA_TAGS = ("image", "thumbnail", "marquee", "wheel", "boxart", "boxback", "cartridge",
                   "titleshot", "screenshot", "fanart", "mix", "map", "bezel", "video",
                   "manual", "magazine")
+# what "Replace description" takes from the collection (the name, favorite and play count stay)
+CAT_DESC_TAGS = ("desc", "genre", "developer", "publisher", "releasedate", "players")
 CAT_SKIP_DIRS = {"media", "images", "videos", "manuals", "downloaded_images", "downloaded_videos"}
 CAT_LIST_EXT = (".m3u", ".cue", ".gdi", ".ccd")
 CAT_PREVIEW_MAX = 8 * 1024 * 1024
@@ -5749,8 +6271,32 @@ def cat_list_refs(src, base, entry):
     return out
 
 
-def cat_plan(src, base, xml_root, game_paths, kinds):
-    """-> (plan, gamelist entries to add on the device)."""
+def cat_device_media(system_dir):
+    """{rom path: set of media tags whose file exists} of roms/<system>/gamelist.xml."""
+    out = {}
+    p = os.path.join(system_dir, "gamelist.xml")
+    try:
+        with open(p, "rb") as f:
+            root = cat_parse(f.read())
+    except (OSError, LinkError):
+        return out
+    for n in root:
+        if n.tag != "game":
+            continue
+        tags = set()
+        for c in n:
+            v = (c.text or "").strip()
+            if c.tag in CAT_MEDIA_TAGS and v:
+                f = v if v.startswith("/") else os.path.join(system_dir, *cat_norm(v).split("/"))
+                if os.path.isfile(f):
+                    tags.add(c.tag)
+        out[cat_norm(n.findtext("path"))] = tags
+    return out
+
+
+def cat_plan(src, base, xml_root, game_paths, kinds, keep=None):
+    """-> (plan, gamelist entries to add on the device). keep: {rom: tags} - media the
+    device already has for a game: those are not downloaded (no "Replace media")."""
     want = {cat_norm(p) for p in game_paths if p}
     kinds = set(kinds)
     plan, nodes, seen = [], [], set()
@@ -5765,12 +6311,12 @@ def cat_plan(src, base, xml_root, game_paths, kinds):
             seen.add(r)
             plan.append((e, r))
 
-    def copy_node(node, media):
+    def copy_node(node, media, own=()):
         new = ET.Element(node.tag)
         for c in node:
             if c.tag in CAT_MEDIA_TAGS or ((c.text or "").strip().startswith("./") and c.tag != "path"):
                 e = media.get(c.tag)
-                if c.tag not in kinds or e is None:
+                if c.tag not in kinds or e is None or c.tag in own:
                     continue
                 add(e)
                 el = ET.SubElement(new, c.tag)
@@ -5800,7 +6346,7 @@ def cat_plan(src, base, xml_root, game_paths, kinds):
                 if e.name.lower().endswith(CAT_LIST_EXT):      # an .m3u listing .cue files
                     for e2 in cat_list_refs(src, base, e):
                         add(e2)
-        new = copy_node(node, cat_media(node, base))
+        new = copy_node(node, cat_media(node, base), (keep or {}).get(rel_rom, ()))
         p = ET.Element("path")
         p.text = "./" + rel_rom
         new.insert(0, p)
@@ -5824,7 +6370,7 @@ def cat_plan(src, base, xml_root, game_paths, kinds):
     return plan, nodes
 
 
-def cat_merge(system_dir, nodes, exists_fn=None, path=None):
+def cat_merge(system_dir, nodes, exists_fn=None, path=None, replace_media=False, replace_desc=False):
     """Adds the entries to roms/<system>/gamelist.xml. A game that is already there
     keeps its own values (play count, favorite...): only what it lacks is added.
     exists_fn(rel) tells whether a file is there (the cloud); default: on the card.
@@ -5873,7 +6419,11 @@ def cat_merge(system_dir, nodes, exists_fn=None, path=None):
             if cur is None:
                 old.append(c)
                 touched = True
-            elif c.tag in CAT_MEDIA_TAGS and not exists(cur.text or ""):
+            elif c.tag in CAT_MEDIA_TAGS and (replace_media or not exists(cur.text or "")):
+                if (cur.text or "").strip() != (c.text or "").strip():
+                    cur.text = c.text
+                    touched = True
+            elif replace_desc and c.tag in CAT_DESC_TAGS and (cur.text or "") != (c.text or ""):
                 cur.text = c.text
                 touched = True
         changed += touched
@@ -5916,7 +6466,7 @@ class CatalogSession:
             with self.lock:
                 self._tree()
         self.used = time.time()
-        return {"service": self.src.title, "root": self.root.to_dict()}
+        return {"service": self.src.title, "root": self.root.to_dict(), "direct": bool(getattr(self.src, "direct", False))}
 
     def probe(self, rel=""):
         """Path of the folder with gamelist.xml at/under rel, or None (nothing is downloaded
@@ -5939,7 +6489,56 @@ class CatalogSession:
             self.bases[cat_base_path(base)] = base
             return cat_listing(self.src, base, xml_root)
 
-    def media(self, folder, rel, limit=CAT_PREVIEW_MAX):
+    def thumb(self, folder, rel):
+        """The service's small preview of a picture -> (bytes, mime), or None when there is
+        none (a zip, archive.org, a share with a password, an error): then the picture itself
+        is used. After three failures without a single preview they are not asked any more."""
+        if not getattr(self, "thumb_ok", False) and getattr(self, "thumb_fail", 0) >= 3:
+            return None
+        with self.lock:
+            self.used = time.time()
+            root = self._tree()
+            ask = getattr(self.src, "thumb_request", None)
+            if ask is None:
+                return None
+            base = self.bases.get(folder)
+            if base is None:
+                base = find_entry(root, folder, self.src) if folder.strip("/") else root
+                if base is not None and not base.is_dir and is_zip(base):
+                    base = zip_view(self.src, base)
+            e = cat_find(base, rel) if base is not None and base.is_dir else None
+            if e is None or e.is_dir or e.zip_file is not None:
+                return None
+        _NET.quick = True
+        try:
+            req = ask(e)
+            if not req:
+                return None
+            url, headers = req
+            with open_url(url, headers) as resp:
+                body = resp.read(CAT_THUMB_MAX + 1)
+            mime = cat_img_mime(body)
+            if not mime or len(body) > CAT_THUMB_MAX:
+                raise LinkError("not a picture")
+            self.thumb_ok = True
+            return body, mime
+        except Exception:
+            self.thumb_fail = getattr(self, "thumb_fail", 0) + 1
+            return None
+        finally:
+            _NET.quick = False
+
+    def media(self, folder, rel, limit=CAT_PREVIEW_MAX, unlocked=True):
+        _NET.quick = True
+        try:
+            return self._media(folder, rel, limit, unlocked)
+        finally:
+            _NET.quick = False
+
+    def _media(self, folder, rel, limit, unlocked):
+        # unlocked: a plain file (a video of a few MB) is read without holding the lock,
+        # so the pictures of other games keep loading meanwhile
+        plain = None
         with self.lock:
             self.used = time.time()
             root = self._tree()
@@ -5958,8 +6557,10 @@ class CatalogSession:
             fast = (z is not None and isinstance(info, zipfile.ZipInfo) and info.compress_type in (0, 8)
                     and not info.flag_bits & 1)
             if not fast:
-                return cat_read(self.src, e, limit)          # plain file or unusual zip entry
-            url, headers = self.data_urls.get(z.rel), {}
+                if not unlocked:
+                    return cat_read(self.src, e, limit)      # plain file or unusual zip entry
+                plain = e
+            url, headers = (self.data_urls.get(z.rel), {}) if plain is None else ("", {})
             if url is None:
                 # the archive was opened already: reuse its address (redirects done)
                 rf = getattr(_ZIPS.get(id(z)), "fp", None)
@@ -5967,6 +6568,8 @@ class CatalogSession:
                     url, headers = rf.url, dict(rf.headers)
                 else:
                     url, headers = self.src.download_request(z)
+        if plain is not None:
+            return cat_read(self.src, plain, limit)
         data = None
         for attempt in range(2):
             try:
@@ -5981,6 +6584,18 @@ class CatalogSession:
                     self.data_urls.pop(z.rel, None)
                     url, headers = self.src.download_request(z)
         return data
+
+
+def cat_img_mime(b):
+    if b[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if b[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if b[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 def cat_zip_member(url, headers, zip_size, info):
@@ -6011,7 +6626,7 @@ def cat_zip_member(url, headers, zip_size, info):
     return data, final
 
 
-def cat_merge_cloud(dest, nodes):
+def cat_merge_cloud(dest, nodes, replace_media=False, replace_desc=False):
     """Catalog into the cloud: GameROMs/<system>/gamelist.xml is fetched, completed with
     the new games and put back."""
     rc, out, _err = rclone(["lsjson", "-R", "--files-only", dest.remote], timeout=600)
@@ -6031,7 +6646,7 @@ def cat_merge_cloud(dest, nodes):
             rc, _o, err = rclone(["copyto", dest.remote + "/gamelist.xml", local], timeout=300)
             if rc != 0:
                 raise LinkError(_last_line(err) or "rclone %d" % rc)
-        n = cat_merge(tmpd, nodes, exists_fn=exists, path=local)
+        n = cat_merge(tmpd, nodes, exists_fn=exists, path=local, replace_media=replace_media, replace_desc=replace_desc)
         if n:
             rc, _o, err = rclone(["copyto", local, dest.remote + "/gamelist.xml"], timeout=300)
             if rc != 0:
@@ -6415,7 +7030,7 @@ def main(argv):
         password = password or os.environ.get("SS_LINK_PASSWORD") or None
         try:
             src, root = load_tree(argv[1], password=password, quiet=True)
-            print(json.dumps({"service": src.title, "root": root.to_dict()}, ensure_ascii=False))
+            print(json.dumps({"service": src.title, "root": root.to_dict(), "direct": bool(getattr(src, "direct", False))}, ensure_ascii=False))
             return 0
         except LinkError as e:
             need = str(e) in (t("password_needed"), t("password_wrong"))
@@ -6484,6 +7099,7 @@ def main(argv):
     if len(argv) >= 2 and argv[0] == "--download":
         url, dest_name, items, password, web, target, unpack = argv[1], None, [], None, False, "device", False
         catalog, games, kinds = None, [], []
+        replace_media = replace_desc = False
         i = 2
         while i < len(argv):
             a = argv[i]
@@ -6509,6 +7125,10 @@ def main(argv):
                 web = True
             if a == "--unpack":
                 unpack = True
+            if a == "--replace-media":
+                replace_media = True
+            if a == "--replace-desc":
+                replace_desc = True
             i += 1
         password = password or os.environ.get("SS_LINK_PASSWORD") or None
         try:
@@ -6536,13 +7156,17 @@ def main(argv):
             hook = None
             if catalog is not None:
                 base, xml_root = cat_open(src, root, catalog)
-                plan, nodes = cat_plan(src, base, xml_root, games, kinds)
+                # media the device already has for a game stay, unless "Replace media"
+                keep = None if replace_media or dest.kind != "device" else cat_device_media(dest.path)
+                plan, nodes = cat_plan(src, base, xml_root, games, kinds, keep)
                 if not plan:
                     raise LinkError(t("cat_nothing"))
 
                 def hook(dest=dest, nodes=nodes):
                     try:
-                        n = cat_merge(dest.path, nodes) if dest.kind == "device" else cat_merge_cloud(dest, nodes)
+                        n = (cat_merge(dest.path, nodes, replace_media=replace_media, replace_desc=replace_desc)
+                             if dest.kind == "device" else
+                             cat_merge_cloud(dest, nodes, replace_media=replace_media, replace_desc=replace_desc))
                     except (LinkError, OSError) as e:
                         con(t("cat_merge_failed", err=e) + "\n")
                         log(t("cat_merge_failed", err=e).strip().lstrip("⚠️ "))
@@ -7663,7 +8287,7 @@ show_control_panel() {
         echo ""
         echo "══════════════════════════════════════════════════════════" 
         echo ""
-        echo "           Save Sync - Центр управления v1.4.8"
+        echo "           Save Sync - Центр управления v1.5.0"
         echo "" 
         echo "══════════════════════════════════════════════════════════"
         echo ""
@@ -8007,17 +8631,45 @@ show_control_panel() {
                 echo ""
                 echo " 🗑️  Очистка временных файлов"
                 echo ""
-                echo "Будут удалены:"
-                echo "  • /tmp/save_sync_*"
-                echo "  • /tmp/rclone_*"
-                echo "  • /tmp/*.lock"
-                echo ""
-                read -p "Продолжить? (y/n): " clean_confirm
-                if [ "$clean_confirm" = "y" ] || [ "$clean_confirm" = "Y" ]; then
-                    rm -rf /tmp/save_sync_* /tmp/rclone_* /tmp/*.lock 2>/dev/null
-                    echo "✅ Временные файлы удалены"
+                # only what nothing needs: not locks, the web interface pid, the rclone copy, the theme
+                if sync_busy || pgrep -f "download_roms\.sh|upload_roms\.sh|link_download\.py" >/dev/null 2>&1; then
+                    echo "⏳ Сейчас идёт синхронизация или загрузка - очистите файлы позже."
                 else
-                    echo "Отменено"
+                    CLEAN_OPS=""
+                    for p in /tmp/save_sync_result.* /tmp/save_sync_progress.json /tmp/save_sync_progress.log /tmp/save_sync_stage.json /tmp/save_sync_op.json; do
+                        [ -e "$p" ] && CLEAN_OPS="$CLEAN_OPS $p"
+                    done
+                    CLEAN_RCL=""
+                    for p in /tmp/rclone.zip /tmp/rclone-*-linux-*; do
+                        [ -e "$p" ] && CLEAN_RCL="$CLEAN_RCL $p"
+                    done
+                    CLEAN_CACHE=""
+                    [ -d /tmp/save_sync_catalog_cache ] && CLEAN_CACHE=/tmp/save_sync_catalog_cache
+                    CLEAN_ALL="$CLEAN_CACHE$CLEAN_OPS$CLEAN_RCL"
+                    if [ -z "$CLEAN_ALL" ]; then
+                        echo "✅ Временных файлов нет."
+                    else
+                        clean_size() {
+                            local kb
+                            kb=$(du -sk $1 2>/dev/null | awk '{s+=$1} END {print s+0}')
+                            if [ "$kb" -ge 1024 ]; then echo "$((kb / 1024)) МБ"; else echo "$kb КБ"; fi
+                        }
+                        echo "Будут удалены:"
+                        [ -n "$CLEAN_CACHE" ] && echo "  • кэш каталога игр: $(clean_size "$CLEAN_CACHE")"
+                        [ -n "$CLEAN_OPS" ] && echo "  • файлы завершённых операций"
+                        [ -n "$CLEAN_RCL" ] && echo "  • остатки установки rclone"
+                        echo "Всего: $(clean_size "$CLEAN_ALL")"
+                        echo ""
+                        echo "Блокировки, работающий веб-интерфейс и настройки не затрагиваются."
+                        echo ""
+                        read -p "Продолжить? (y/n): " clean_confirm
+                        if [ "$clean_confirm" = "y" ] || [ "$clean_confirm" = "Y" ]; then
+                            rm -rf $CLEAN_ALL 2>/dev/null
+                            echo "✅ Временные файлы удалены"
+                        else
+                            echo "Отменено"
+                        fi
+                    fi
                 fi
                 echo ""
                 pause
@@ -8167,7 +8819,7 @@ show_control_panel() {
                 mv -f "$NEW_CONF" "$RCLONE_CONF"
                 chmod 600 "$RCLONE_CONF"
                 # память о прошлой синхронизации относится к старому облаку
-                rm -f "$BASE/.sync_base.json"
+                rm -f "$DATA_DIR/.sync_base.json"
                 if [ -f "$STATE_FILE" ]; then
                     sed -i -e '/^PENDING_UPLOAD=/d' -e '/^MARKER_DONE=/d' "$STATE_FILE"
                 fi
@@ -8239,7 +8891,7 @@ restart_web_after_update() {
 start_web() {
     echo ""
     echo "══════════════════════════════════════════════════════════"
-    echo " 🌐 Save Sync - Веб-интерфейс v1.4.8"
+    echo " 🌐 Save Sync - Веб-интерфейс v1.5.0"
     echo "══════════════════════════════════════════════════════════"
     echo ""
     
@@ -8549,9 +9201,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # числа только цифрами, переключатели только true/false, в тексте
             # нет символов, которые выходят за пределы кавычек
             int_def = {"SYNC_INTERVAL": 0, "MAX_RETRIES": 3, "CONFLICT_KEEP_DAYS": 3,
-                       "MIN_FREE_KB": 51200, "MAX_LOG_SIZE": 102400, "LOG_KEEP_COUNT": 3}
+                       "MIN_FREE_KB": 51200, "MAX_LOG_SIZE": 102400}
             bool_def = {"NOTIFICATIONS": "true", "SKIP_UNCHANGED": "true",
-                        "ROMS_SYNC_MEDIA": "false", "LOG_ENABLED": "true"}
+                        "ROMS_SYNC_MEDIA": "false", "LOG_ENABLED": "true",
+                        "WEB_SHOW_ROMS": "true", "WEB_SHOW_LINK": "true"}
             for key in list(current):
                 val = str(current[key]).strip()
                 if key in int_def:
@@ -8573,7 +9226,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 current["SYNC_MODE"] = "full" if current.get("SKIP_UNCHANGED") == "false" else "economy"
             with open(CONFIG_FILE, "w") as f:
                 f.write("# ========================================\n")
-                f.write("# Save Sync v1.4.8 - Главный конфиг\n")
+                f.write("# Save Sync v1.5.0 - Главный конфиг\n")
                 f.write("# ========================================\n\n")
                 f.write("# ---- НАСТРОЙКИ СИНХРОНИЗАЦИИ ----\n")
                 f.write(f'SYNC_INTERVAL="{current.get("SYNC_INTERVAL", 0)}"\n')
@@ -8589,8 +9242,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 f.write("# ---- НАСТРОЙКИ ЛОГИРОВАНИЯ ----\n")
                 f.write(f'LOG_ENABLED="{current.get("LOG_ENABLED", "true")}"\n')
                 f.write(f'MAX_LOG_SIZE="{current.get("MAX_LOG_SIZE", 102400)}"\n')
-                f.write(f'LOG_LEVEL="{current.get("LOG_LEVEL", "info")}"\n')
-                f.write(f'LOG_KEEP_COUNT="{current.get("LOG_KEEP_COUNT", 3)}"\n')
+                f.write(f'LOG_LEVEL="{current.get("LOG_LEVEL", "info")}"\n\n')
+                f.write("# ---- ВЕБ-ИНТЕРФЕЙС ----\n")
+                f.write(f'WEB_SHOW_ROMS="{current.get("WEB_SHOW_ROMS", "true")}"\n')
+                f.write(f'WEB_SHOW_LINK="{current.get("WEB_SHOW_LINK", "true")}"\n')
+                f.write(f'WEB_LINKS="{current.get("WEB_LINKS", "")}"\n')
             return True
         except:
             return False
@@ -8747,12 +9403,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 pass
         return stats
 
+    # the icon of the page and of a home screen shortcut (kept here, no files on the card)
+    APP_FILES = {
+        "/icon-192.png": ("image/png", "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"),
+        "/icon-512.png": ("image/png", "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"),
+        "/manifest.webmanifest": ("application/manifest+json", '{"name":"Save Sync","short_name":"Save Sync","start_url":"/","display":"standalone","background_color":"#0A0E17","theme_color":"#1565C0","icons":[{"src":"/icon-192.png","sizes":"192x192","type":"image/png"},{"src":"/icon-512.png","sizes":"512x512","type":"image/png"}]}'),
+    }
+
+    def send_app_file(self, path):
+        import base64
+        ctype, data = self.APP_FILES[path]
+        body = data.encode("utf-8") if ctype.startswith("application/") else base64.b64decode(data)
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         if not self.request_allowed(False):
             self.send_error(403)
             return
         if self.path == "/" or self.path == "/index.html":
             self.send_html(HTML)
+            return
+        if self.path in self.APP_FILES:
+            self.send_app_file(self.path)
             return
         
         parsed = urllib.parse.urlparse(self.path)
@@ -8780,6 +9457,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.api_conflicts()
         elif path == "/api/cloud/prev":
             self.api_cloud_prev()
+        elif path == "/api/sections":
+            self.send_json(self._sections())
+        elif path == "/api/links/saved":
+            self.send_json({"links": self._saved_links()})
+        elif path == "/api/config/export":
+            self.api_config_export()
+        elif path == "/api/link/catalog_file":
+            self.api_link_catalog_file(parsed.query)
+        elif path == "/api/link/catalog_local":
+            self.api_link_catalog_local(parsed.query)
+        elif path == "/api/link/catalog_cover":
+            self.api_link_catalog_cover(parsed.query)
+        elif path == "/api/link/catalog_pic":
+            self.api_link_catalog_cover(parsed.query, thumb=False)
         else:
             self.send_error(404)
 
@@ -8811,6 +9502,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.api_link_catalog()
         elif parsed.path == "/api/link/catalog_media":
             self.api_link_catalog_media()
+        elif parsed.path == "/api/link/catalog_video":
+            self.api_link_catalog_video()
+        elif parsed.path == "/api/link/catalog_have_media":
+            self.api_link_catalog_have_media()
+        elif parsed.path == "/api/link/catalog_device_media":
+            self.api_link_catalog_device_media()
+        elif parsed.path == "/api/link/catalog_device_covers":
+            self.api_link_catalog_device_covers()
+        elif parsed.path == "/api/link/catalog_seen":
+            self.api_link_catalog_seen()
+        elif parsed.path == "/api/link/catalog_cached":
+            self.api_link_catalog_cached()
+        elif parsed.path == "/api/link/catalog_touch":
+            self._cat_call(lambda sess, d: (sess.listing(), {"ok": True})[1])
         elif parsed.path == "/api/link/catalog_probe":
             self.api_link_catalog_probe()
         elif parsed.path == "/api/link/have":
@@ -8821,6 +9526,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.api_cancel()
         elif parsed.path == "/api/cloud/switch":
             self.api_cloud_switch()
+        elif parsed.path == "/api/sections":
+            self.api_sections_save()
+        elif parsed.path == "/api/links/saved":
+            self.api_saved_links_save()
+        elif parsed.path == "/api/config/import":
+            self.api_config_import()
         elif parsed.path == "/api/conflicts/restore":
             self.api_conflict_action("restore")
         elif parsed.path == "/api/conflicts/delete":
@@ -9245,6 +9956,273 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except:
             self.send_json({"success": False, "error": "Ошибка сохранения темы"})
 
+    # the web interface sections (Settings -> Sections) are kept in sync.conf; only the
+    # web page uses them
+    SECTION_KEYS = {"roms": ("WEB_SHOW_ROMS", True), "link": ("WEB_SHOW_LINK", True)}
+
+    def _sections(self):
+        cfg = self.read_config()
+        out = {}
+        for name, (key, default) in self.SECTION_KEYS.items():
+            v = (cfg.get(key) or "").lower()
+            out[name] = (v == "true") if v in ("true", "false") else default
+        return out
+
+    def api_sections_save(self):
+        data = self._json_body()
+        changes = {}
+        for name, (key, _default) in self.SECTION_KEYS.items():
+            if isinstance(data.get(name), bool):
+                changes[key] = "true" if data[name] else "false"
+        if changes and not self.save_config(changes):
+            self.send_json({"error": "sync.conf"})
+            return
+        self.send_json(self._sections())
+
+    # saved links of the web interface: WEB_LINKS in sync.conf, "name,url,folder" URL-encoded,
+    # separated by spaces. Passwords are not saved: a link with one asks for it again.
+    SAVED_MAX = 50
+
+    def _saved_links(self):
+        out = []
+        for item in (self.read_config().get("WEB_LINKS") or "").split():
+            parts = [urllib.parse.unquote(x) for x in item.split(",")]
+            if len(parts) >= 2 and parts[1].startswith(("http://", "https://")):
+                out.append({"name": parts[0], "url": parts[1], "dir": parts[2] if len(parts) > 2 else ""})
+        return out
+
+    # ---- what is new in a saved catalog. .sync_state holds, per saved catalog, a print of
+    # every game seen at the last opening: 8 hex of its path + 4 hex of path and size, so
+    # a new game and a changed file are told apart. Lines are changed under the same lock
+    # as the sync scripts use; the cloud switch keeps them.
+    STATE_PATH = os.path.join(BASE, ".sync_state")
+    STATE_LOCK = "/tmp/save_sync_state.lock"
+
+    def _state_get(self, key):
+        val = None
+        try:
+            with open(self.STATE_PATH) as f:
+                for line in f:
+                    if line.startswith(key + "="):
+                        val = line.split("=", 1)[1].strip()
+        except OSError:
+            pass
+        return val
+
+    def _state_edit(self, change):
+        """change(lines) -> lines; the file is rewritten under the state lock."""
+        import fcntl
+        try:
+            with open(self.STATE_LOCK, "w") as lk:
+                fcntl.flock(lk, fcntl.LOCK_EX)
+                try:
+                    with open(self.STATE_PATH) as f:
+                        lines = f.read().splitlines()
+                except OSError:
+                    lines = []
+                new = change(lines)
+                if new == lines:
+                    return
+                tmp = self.STATE_PATH + ".tmp.%d" % os.getpid()
+                with open(tmp, "w") as f:
+                    f.write("".join(l + "\n" for l in new))
+                os.replace(tmp, self.STATE_PATH)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _seen_key(url, folder):
+        import hashlib
+        folder = "" if folder in ("", "/") else folder
+        return "CATALOG_SEEN_" + hashlib.sha1(("%s|%s" % (url, folder)).encode("utf-8")).hexdigest()[:10]
+
+    @staticmethod
+    def _seen_prints(games):
+        import hashlib
+        out = {}
+        for path, size in games:
+            path = str(path)
+            a = hashlib.sha1(path.encode("utf-8")).hexdigest()[:8]
+            out[a] = hashlib.sha1(("%s|%s" % (path, size)).encode("utf-8")).hexdigest()[:4]
+        return out
+
+    def _seen_saved(self, url, folder):
+        folder = "" if folder in ("", "/") else folder
+        return any(l["url"] == url and ("" if l["dir"] in ("", "/") else l["dir"]) == folder
+                   for l in self._saved_links())
+
+    def _seen_update(self, url, folder, games):
+        """Remembers the games of a saved catalog; -> {new: [paths], changed: [paths]} against
+        the last opening, or None (not saved, or opened for the first time)."""
+        if not url or not self._seen_saved(url, folder):
+            return None
+        key = self._seen_key(url, folder)
+        old_val = self._state_get(key) or ""
+        prints = self._seen_prints(games)
+        value = "1:" + "".join(a + b for a, b in sorted(prints.items()))
+        self._state_edit(lambda lines: [l for l in lines if not l.startswith(key + "=")] + [key + "=" + value])
+        if not old_val.startswith("1:"):
+            return None
+        body = old_val[2:]
+        old = {body[i:i + 8]: body[i + 8:i + 12] for i in range(0, len(body) - 11, 12)}
+        res = {"new": [], "changed": []}
+        import hashlib
+        for path, _size in games:
+            a = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:8]
+            if a not in old:
+                res["new"].append(path)
+            elif old[a] != prints[a]:
+                res["changed"].append(path)
+        return res
+
+    # ---- the list of games of a saved catalog, kept on the card: shown at once when the
+    # catalog is opened, while the collection is checked. Only the text (names, descriptions,
+    # sizes, which media there are), no pictures. Removed with the saved link.
+    LIST_DIR = os.path.join(BASE, ".catalog_cache")
+
+    def _cat_list_file(self, url, folder):
+        return os.path.join(self.LIST_DIR, self._seen_key(url, folder)[len("CATALOG_SEEN_"):] + ".json")
+
+    def _cat_list_put(self, url, folder, data):
+        try:
+            os.makedirs(self.LIST_DIR, exist_ok=True)
+            out = self._cat_list_file(url, folder)
+            tmp = out + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+            os.replace(tmp, out)
+        except (OSError, TypeError, ValueError):
+            pass
+
+    def api_link_catalog_cached(self):
+        import hashlib
+        data = self._json_body()
+        url = (data.get("url") or "").strip()
+        folder = data.get("dir") or ""
+        try:
+            with open(self._cat_list_file(url, folder), encoding="utf-8") as f:
+                res = json.load(f)
+        except (OSError, ValueError):
+            self.send_json({})
+            return
+        if self.get_system() == "Recalbox":
+            res["es_media"] = ["image", "thumbnail", "video"]
+        res["sid"] = hashlib.sha1(("%s|%s" % (url, data.get("password") or "")).encode("utf-8")).hexdigest()[:16]
+        res["cached"] = True
+        self.send_json(res)
+
+    def api_link_catalog_seen(self):
+        """A catalog just saved: its games are remembered now, so the next opening shows
+        what is new."""
+        data = self._json_body()
+        games = [(g[0], g[1]) for g in (data.get("games") or [])[:20000]
+                 if isinstance(g, list) and len(g) == 2]
+        url, folder = (data.get("url") or "").strip(), data.get("dir") or ""
+        self._seen_update(url, folder, games)
+        # the list of the catalog just saved: kept on the card from the last opening
+        try:
+            _mod, sess = self._cat_session(data)
+            last = getattr(sess, "last_catalog", {}).get("" if folder == "/" else folder)
+            if last and self._seen_saved(url, folder):
+                self._cat_list_put(url, folder, last)
+        except Exception:
+            pass
+        self.send_json({"ok": True})
+
+    # ---- export / import of the settings (Settings -> Moving the settings)
+    IMPORT_GROUPS = {
+        "sync": ("SYNC_INTERVAL", "MAX_RETRIES", "CONFLICT_KEEP_DAYS", "NOTIFICATIONS", "SYNC_MODE", "MIN_FREE_KB"),
+        "excluded": ("EXCLUDED_SYSTEMS",),
+        "roms": ("ROMS_SYNC_DIRS", "ROMS_SYNC_MEDIA"),
+        "web": ("WEB_SHOW_ROMS", "WEB_SHOW_LINK"),
+    }
+
+    def api_config_export(self):
+        try:
+            with open(CONFIG_FILE, "rb") as f:
+                body = f.read()
+        except OSError:
+            self.send_error(404)
+            return
+        dev = re.sub(r"[^A-Za-z0-9_-]+", "", self._state_get("DEVICE_NAME") or "") or "device"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Disposition", 'attachment; filename="save_sync_%s.conf"' % dev)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def api_config_import(self):
+        """{text: the exported file, groups: [...]} -> only those settings are taken; saved
+        links ("links") are added to the ones already here."""
+        data = self._json_body()
+        text = str(data.get("text") or "")[:200000]
+        groups = set(data.get("groups") or [])
+        values = {}
+        for line in text.splitlines():
+            m = re.match(r'^\s*([A-Z_]+)\s*=\s*"?(.*?)"?\s*$', line)
+            if m and not line.lstrip().startswith("#"):
+                values[m.group(1)] = m.group(2)
+        changes, added = {}, 0
+        for g, keys in self.IMPORT_GROUPS.items():
+            if g in groups:
+                for k in keys:
+                    if k in values:
+                        changes[k] = values[k]
+        if "links" in groups and values.get("WEB_LINKS"):
+            have = self._saved_links()
+            seen = {(l["url"], l["dir"]) for l in have}
+            items = [",".join(urllib.parse.quote(x, safe="") for x in (l["name"], l["url"], l["dir"])) for l in have]
+            for item in values["WEB_LINKS"].split():
+                parts = [urllib.parse.unquote(x) for x in item.split(",")]
+                if len(parts) < 2 or not parts[1].startswith(("http://", "https://")):
+                    continue
+                folder = parts[2] if len(parts) > 2 else ""
+                if (parts[1], folder) in seen or len(items) >= self.SAVED_MAX:
+                    continue
+                seen.add((parts[1], folder))
+                items.append(",".join(urllib.parse.quote(x, safe="") for x in (parts[0][:80], parts[1][:2000], folder[:500])))
+                added += 1
+            changes["WEB_LINKS"] = " ".join(items)
+        if not changes:
+            self.send_json({"success": False, "error": "nothing"})
+            return
+        if not self.save_config(changes):
+            self.send_json({"success": False, "error": "sync.conf"})
+            return
+        if "ROMS_SYNC_DIRS" in changes:
+            self.update_roms_filter()
+        self.send_json({"success": True, "settings": len([k for k in changes if k != "WEB_LINKS"]), "links": added})
+
+    def api_saved_links_save(self):
+        data = self._json_body()
+        items = []
+        for link in (data.get("links") or [])[:self.SAVED_MAX]:
+            if not isinstance(link, dict):
+                continue
+            url = str(link.get("url") or "").strip()[:2000]
+            if not url.startswith(("http://", "https://")):
+                continue
+            name = str(link.get("name") or "").strip()[:80] or url
+            folder = str(link.get("dir") or "").strip()[:500]
+            items.append(",".join(urllib.parse.quote(x, safe="") for x in (name, url, folder)))
+        if not self.save_config({"WEB_LINKS": " ".join(items)}):
+            self.send_json({"error": "sync.conf"})
+            return
+        links = self._saved_links()
+        keep = {self._seen_key(l["url"], l["dir"]) for l in links}
+        self._state_edit(lambda lines: [l for l in lines if not l.startswith("CATALOG_SEEN_")
+                                        or l.split("=", 1)[0] in keep])
+        # the cached lists of the links removed
+        try:
+            for name in os.listdir(self.LIST_DIR):
+                if name.endswith(".json") and "CATALOG_SEEN_" + name[:-5] not in keep:
+                    os.remove(os.path.join(self.LIST_DIR, name))
+        except OSError:
+            pass
+        self.send_json({"links": links})
+
     def api_cloud_prev(self):
         ok = prev_cloud_ok()
         self.send_json({"current": cloud_label(RCLONE_CONF), "prev": cloud_label(PREV_CONF) if ok else ""})
@@ -9642,6 +10620,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # request. A catalog is forgotten after 10 minutes without use.
     CAT_PIC_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
                      ".webp": "image/webp", ".bmp": "image/bmp"}
+    CAT_VIDEO_TYPES = {".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm"}
+    CAT_VIDEO_MAX = 40 * 1024 * 1024
     CAT_CACHE = "/tmp/save_sync_catalog_cache"
     CAT_CACHE_MAX = 50 * 1024 * 1024        # /tmp is in memory on Batocera / KNULLI
     CAT_IDLE = 600
@@ -9697,6 +10677,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # Recalbox shows only these three: other media would be downloaded for nothing
             if self.get_system() == "Recalbox":
                 res["es_media"] = ["image", "thumbnail", "video"]
+            folder = res.get("dir") or ""
+            # kept for the cached list of a saved catalog (written on saving it, too)
+            if not hasattr(sess, "last_catalog"):
+                sess.last_catalog = {}
+            sess.last_catalog[folder] = {k: v for k, v in res.items() if k != "es_media"}
+            if self._seen_saved(sess.url, folder):
+                self._cat_list_put(sess.url, folder, sess.last_catalog[folder])
+            res["sid"] = self._cat_sid(sess)
+            seen = self._seen_update(sess.url, res.get("dir") or "", [(g.get("path"), g.get("size")) for g in res.get("games") or []])
+            if seen is not None:
+                res["seen"] = seen
             return res
         self._cat_call(run)
 
@@ -9719,30 +10710,298 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except OSError:
                 pass
 
+    def _cat_pic_bytes(self, sess, folder, rel):
+        """A picture of the catalog, kept in the temporary cache (in memory)."""
+        import hashlib
+        os.makedirs(self.CAT_CACHE, exist_ok=True)
+        key = hashlib.sha1(("%s|%s|%s" % (sess.url, folder, rel)).encode("utf-8")).hexdigest()
+        out = os.path.join(self.CAT_CACHE, key)
+        if os.path.isfile(out):
+            os.utime(out, None)
+            with open(out, "rb") as f:
+                return f.read()
+        body = sess.media(folder, rel)
+        with open(out + ".tmp", "wb") as f:
+            f.write(body)
+        os.replace(out + ".tmp", out)
+        self._cat_cache_trim()
+        return body
+
     def api_link_catalog_media(self):
         import base64
-        import hashlib
 
         def pic(sess, d):
             folder, rel = d.get("dir") or "", d.get("path") or ""
             mime = self.CAT_PIC_TYPES.get(os.path.splitext(rel)[1].lower())
             if not rel or not mime:
                 return {"error": "bad request"}
+            body = self._cat_pic_bytes(sess, folder, rel)
+            return {"data": "data:%s;base64,%s" % (mime, base64.b64encode(body).decode("ascii"))}
+        self._cat_call(pic)
+
+    @staticmethod
+    def _cat_sid(sess):
+        """The id of an open catalog in the cover links (the link itself is not put in them)."""
+        import hashlib
+        return hashlib.sha1(("%s|%s" % (sess.url, sess.password or "")).encode("utf-8")).hexdigest()[:16]
+
+    def _no_file(self):
+        """404 that the browser does not keep: the picture is asked again later."""
+        try:
+            self.send_response(404)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def api_link_catalog_cover(self, query, thumb=True):
+        """A picture of the catalog by a plain link (the browser keeps it): a cover of the list
+        (thumb: the service's small preview when it has one - Yandex Disk, pCloud, Nextcloud
+        folders) or a picture of the details. With its size in the link ("s") the picture is
+        kept for a month: a changed picture gets another link. Nothing is saved on the card."""
+        q = urllib.parse.parse_qs(query)
+        arg = lambda k: (q.get(k) or [""])[0]
+        sess = None
+        with self._cat_lock:
+            for v in type(self)._cat_sessions.values():
+                if self._cat_sid(v) == arg("sid"):
+                    sess = v
+        folder, rel = arg("dir"), arg("path")
+        mime = self.CAT_PIC_TYPES.get(os.path.splitext(rel)[1].lower())
+        if sess is None or not rel or not mime:
+            self._no_file()
+            return
+        try:
+            got = sess.thumb(folder, rel) if thumb and hasattr(sess, "thumb") else None
+            body, ctype = got if got else (self._cat_pic_bytes(sess, folder, rel), mime)
+        except Exception:
+            self._no_file()
+            return
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "private, max-age=2592000, immutable" if arg("s") else "private, max-age=3600")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def api_link_catalog_video(self):
+        """The video of a game is downloaded into the catalog cache once; the page then
+        plays it from api/link/catalog_file (with Range, as phones need for video)."""
+        import hashlib
+
+        def vid(sess, d):
+            folder, rel = d.get("dir") or "", d.get("path") or ""
+            ext = os.path.splitext(rel)[1].lower()
+            if not rel or ext not in self.CAT_VIDEO_TYPES:
+                return {"error": "bad request"}
             os.makedirs(self.CAT_CACHE, exist_ok=True)
-            key = hashlib.sha1(("%s|%s|%s" % (sess.url, folder, rel)).encode("utf-8")).hexdigest()
-            out = os.path.join(self.CAT_CACHE, key)
+            name = hashlib.sha1(("%s|%s|%s" % (sess.url, folder, rel)).encode("utf-8")).hexdigest() + ext
+            out = os.path.join(self.CAT_CACHE, name)
             if os.path.isfile(out):
                 os.utime(out, None)
-                with open(out, "rb") as f:
-                    body = f.read()
             else:
-                body = sess.media(folder, rel)
+                body = sess.media(folder, rel, limit=self.CAT_VIDEO_MAX, unlocked=True)
                 with open(out + ".tmp", "wb") as f:
                     f.write(body)
                 os.replace(out + ".tmp", out)
                 self._cat_cache_trim()
-            return {"data": "data:%s;base64,%s" % (mime, base64.b64encode(body).decode("ascii"))}
-        self._cat_call(pic)
+            return {"src": "/api/link/catalog_file?id=" + name}
+        self._cat_call(vid)
+
+    def api_link_catalog_file(self, query):
+        name = (urllib.parse.parse_qs(query).get("id") or [""])[0]
+        if not re.match(r"^[0-9a-f]{40}[.](mp4|m4v|webm)$", name):
+            self.send_error(404)
+            return
+        self._send_file(os.path.join(self.CAT_CACHE, name), self.CAT_VIDEO_TYPES[os.path.splitext(name)[1]])
+
+    def _cat_local_path(self, folder, rel):
+        """roms/<folder>/<rel> when it is a picture or video inside that system folder."""
+        if not folder or "/" in folder or folder in (".", "..") or not rel or rel.startswith("/") or "\x00" in rel:
+            return None
+        if os.path.splitext(rel)[1].lower() not in self.CAT_PIC_TYPES and os.path.splitext(rel)[1].lower() not in self.CAT_VIDEO_TYPES:
+            return None
+        base = os.path.realpath(os.path.join(ROMS_DIR, folder))
+        p = os.path.realpath(os.path.join(base, *[x for x in rel.split("/") if x not in ("", ".")]))
+        if not p.startswith(base + os.sep) or not os.path.isfile(p):
+            return None
+        return p
+
+    def api_link_catalog_have_media(self):
+        """Which media files of a game are already in roms/<dir> with the same size."""
+        data = self._json_body()
+        folder = (data.get("dir") or "").strip()
+        have = []
+        for item in (data.get("files") or [])[:50]:
+            try:
+                rel, size = item[0], int(item[1])
+                p = self._cat_local_path(folder, rel)
+                if p and os.path.getsize(p) == size:
+                    have.append(rel)
+            except (OSError, ValueError, TypeError, IndexError, AttributeError):
+                pass
+        self.send_json({"have": have})
+
+    CAT_DEV_TAGS = ("image", "thumbnail", "boxart", "screenshot", "mix", "titleshot", "fanart", "marquee",
+                    "wheel", "cartridge", "boxback", "video")
+    CAT_DEV_INFO = ("desc", "genre", "players", "developer", "publisher", "lang", "region", "releasedate")
+    _cat_dev_cache = {}
+
+    def _cat_dev_index(self, folder):
+        """{rom path: {tag: file}} of roms/<folder>/gamelist.xml, read again when it changes."""
+        import xml.etree.ElementTree as ET
+        p = os.path.join(ROMS_DIR, folder, "gamelist.xml")
+        try:
+            st = os.stat(p)
+        except OSError:
+            return {}
+        key = (st.st_mtime, st.st_size)
+        hit = self._cat_dev_cache.get(p)
+        if hit and hit[0] == key:
+            return hit[1]
+        index = {}
+        try:
+            root = ET.parse(p).getroot()
+        except (ET.ParseError, OSError):
+            root = None
+        for n in (root if root is not None else []):
+            if n.tag != "game":
+                continue
+            media, info = {}, {}
+            for c in n:
+                v = (c.text or "").strip()
+                if c.tag in self.CAT_DEV_TAGS and v:
+                    media[c.tag] = v
+                elif c.tag in self.CAT_DEV_INFO and v:
+                    info[c.tag] = v
+            if media or info:
+                media["__info"] = info
+            index[self._cat_rel_norm(n.findtext("path") or "")] = media
+        type(self)._cat_dev_cache = {p: (key, index)}
+        return index
+
+    @staticmethod
+    def _cat_rel_norm(v):
+        v = (v or "").strip().replace("\\", "/")
+        while v.startswith("./"):
+            v = v[2:]
+        return os.path.normpath(v).replace(os.sep, "/") if v else ""
+
+    def api_link_catalog_device_media(self):
+        """Media of a game from its entry in the device's gamelist.xml: {tag: path in
+        roms/<dir>} of the files that exist (shown through api/link/catalog_local)."""
+        data = self._json_body()
+        folder = (data.get("dir") or "").strip()
+        out, info = {}, None
+        if folder and "/" not in folder and folder not in (".", ".."):
+            out, info = self._cat_dev_media(folder, self._cat_dev_index(folder).get(self._cat_rel_norm(data.get("path") or ""), {}))
+        self.send_json({"media": out, "info": info})
+
+    def _cat_dev_media(self, folder, entry):
+        """-> ({tag: path in roms/<folder>} of the files that exist, the description or None)"""
+        out, info = {}, None
+        base = os.path.realpath(os.path.join(ROMS_DIR, folder))
+        for tag, v in entry.items():
+            if tag == "__info":
+                info = v
+                continue
+            if v.startswith("/"):
+                full = os.path.realpath(v)
+                if not full.startswith(base + os.sep):
+                    continue
+                rel = os.path.relpath(full, base).replace(os.sep, "/")
+            else:
+                rel = self._cat_rel_norm(v)
+            if rel and self._cat_local_path(folder, rel):
+                out[tag] = rel
+        return out, info
+
+    CAT_COVER_ORDER = ("thumbnail", "image", "boxart", "screenshot", "mix", "titleshot", "marquee", "wheel",
+                       "cartridge", "fanart")
+
+    def api_link_catalog_device_covers(self):
+        """The cover and the short data of each game already on the device, from its
+        gamelist.xml (one request for the whole list): {rom path: picture in roms/<dir>},
+        {rom path: {year, genre, players, desc}}."""
+        data = self._json_body()
+        folder = (data.get("dir") or "").strip()
+        out, rows = {}, {}
+        if folder and "/" not in folder and folder not in (".", ".."):
+            index = self._cat_dev_index(folder)
+            for p in (data.get("paths") or [])[:5000]:
+                if not isinstance(p, str):
+                    continue
+                media, info = self._cat_dev_media(folder, index.get(self._cat_rel_norm(p), {}))
+                if info:
+                    row = {k: info[k] for k in ("genre", "players", "desc") if info.get(k)}
+                    year = (info.get("releasedate") or "")[:4]
+                    if year.isdigit():
+                        row["year"] = year
+                    if row:
+                        rows[p] = row
+                for tag in self.CAT_COVER_ORDER:
+                    rel = media.get(tag)
+                    if rel and os.path.splitext(rel)[1].lower() in self.CAT_PIC_TYPES:
+                        out[p] = rel
+                        break
+        self.send_json({"covers": out, "info": rows})
+
+    def api_link_catalog_local(self, query):
+        q = urllib.parse.parse_qs(query)
+        p = self._cat_local_path((q.get("dir") or [""])[0], (q.get("path") or [""])[0])
+        if not p:
+            self.send_error(404)
+            return
+        ext = os.path.splitext(p)[1].lower()
+        self._send_file(p, self.CAT_PIC_TYPES.get(ext) or self.CAT_VIDEO_TYPES[ext])
+
+    def _send_file(self, p, ctype):
+        """A file with Range support (a phone's video player needs it)."""
+        try:
+            size = os.path.getsize(p)
+            f = open(p, "rb")
+        except OSError:
+            self.send_error(404)
+            return
+        with f:
+            start, end = 0, size - 1
+            m = re.match(r"bytes=(\d*)-(\d*)$", (self.headers.get("Range") or "").strip())
+            if m and (m.group(1) or m.group(2)):
+                if m.group(1):
+                    start = int(m.group(1))
+                    if m.group(2):
+                        end = min(int(m.group(2)), size - 1)
+                else:                              # the last N bytes
+                    start = max(0, size - int(m.group(2)))
+                if start > end:
+                    self.send_response(416)
+                    self.send_header("Content-Range", "bytes */%d" % size)
+                    self.end_headers()
+                    return
+                self.send_response(206)
+                self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
+            else:
+                self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            f.seek(start)
+            left = end - start + 1
+            try:
+                while left > 0:
+                    chunk = f.read(min(256 * 1024, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass                               # the player moved on
 
     def api_link_have(self):
         """Which files of the open folder are already in roms/<system> with the same size
@@ -9795,6 +11054,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         target = "cloud" if data.get("target") == "cloud" else "device"
         cmd = [sys.executable, LINK_SCRIPT, "--download", url, "--dest", dest, "--target", target,
                "--catalog", data.get("dir") or "", "--media", ",".join(kinds), "--web-progress"]
+        if data.get("replace_media"):
+            cmd.append("--replace-media")
+        if data.get("replace_desc"):
+            cmd.append("--replace-desc")
         for g in games:
             cmd += ["--game", g]
         try:
@@ -9957,7 +11220,11 @@ HTML = '''<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Save Sync Web</title>
+<title>Save Sync</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="theme-color" content="#1565C0">
 <style>
 
 /* Анимация прогресс-бара */
@@ -9989,6 +11256,9 @@ HTML = '''<!DOCTYPE html>
     --error-hover: #D32F2F;
     --warning: #FFCA28;
     --warning-hover: #FFB300;
+    --conf-bg: #2A2416;            /* the save conflicts block */
+    --conf-line: #4A3F22;
+    --chip-bg: #26344A;
     --disabled: #424242;
     --radius: 8px;
     --elevation-0: none;
@@ -10022,6 +11292,9 @@ HTML = '''<!DOCTYPE html>
     --error-hover: #D32F2F;
     --warning: #FFC107;
     --warning-hover: #F9A825;
+    --conf-bg: #FFF8E1;
+    --conf-line: #F3E3B0;
+    --chip-bg: #ECEEF1;
     --disabled: #BDBDBD;
     --radius: 8px;
     --elevation-0: none;
@@ -10347,17 +11620,34 @@ body{font-family:'Roboto','Segoe UI',system-ui,sans-serif;background:var(--bg-pr
 /* ========== ПОДПИСЬ ПОД КНОПКАМИ ========== */
 .sync-note{margin-top:6px;padding:10px 16px;background:var(--bg-card);border-radius:var(--radius);border-left:4px solid var(--warning);font-size:11px;color:var(--text-secondary);line-height:1.6;box-shadow:var(--elevation-0)}
 .sync-note p{margin:3px 0}
+.sync-note p:first-child{cursor:pointer;user-select:none}
+.sync-note .note-caret::before{content:'Скрыть';margin-left:10px;font-size:12px;font-weight:400;color:var(--accent)}
+.sync-note.folded .note-caret::before{content:'Подробнее'}
+.sync-note .note-caret::after{content:'▾';margin-left:4px;font-size:16px;line-height:1;vertical-align:-2px;color:var(--accent)}
+.sync-note.folded .note-caret::after{content:'▸'}
+.sync-note.folded p:not(:first-child){display:none}
+.sync-note .note-short{display:none;font-weight:400;color:var(--text-primary)}
+.sync-note.folded .note-short{display:inline}
+.sync-note.folded{padding-top:6px;padding-bottom:6px}
 .sync-note strong{color:var(--text-primary)}
-.conflicts-box{margin:10px 0 14px;padding:12px 14px;background:var(--bg-card);border-radius:var(--radius);border:1px solid var(--panel-border);border-left:4px solid var(--warning)}
-.conflicts-head{font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:4px}
-.conflicts-hint{font-size:12px;color:var(--text-secondary);line-height:1.5;margin-bottom:6px}
-.conflict-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:9px 0 3px;border-top:1px solid var(--border-color);margin-top:6px}
+.conflicts-box{margin:10px 0 14px;padding:12px 14px;background:var(--conf-bg);border-radius:var(--radius);border:1px solid var(--panel-border)}
+.conflicts-head{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;color:var(--text-primary)}
+.cf-ico{flex:none;width:22px;height:22px;border-radius:50%;background:var(--warning);color:#3A2A00;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800}
+.cf-n{display:inline-block;background:var(--warning);color:#3A2A00;border-radius:999px;font-size:11px;font-weight:700;line-height:1.4;padding:1px 7px}
+.conflicts-hint{font-size:12px;color:var(--text-secondary);line-height:1.5;margin:4px 0 2px 30px}
+.cf-more{background:none;border:0;padding:0;margin-left:4px;color:var(--accent);font:inherit;cursor:pointer}
+.cf-long{display:block;margin-top:4px}
+.conflict-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 0 2px;border-top:1px solid var(--conf-line);margin-top:8px}
+.cf-chips{margin-top:4px;line-height:1}
+.cf-chip{display:inline-block;font-size:10px;font-weight:600;padding:1px 7px;border-radius:999px;background:var(--chip-bg);color:var(--text-secondary);margin-right:6px;vertical-align:1px;text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap}
+.conflict-actions .cf-del{background:rgba(239,83,80,0.12);color:var(--error);box-shadow:none}
+.conflict-actions .cf-del:hover{background:rgba(239,83,80,0.22);color:var(--error)}
 .conflict-info{flex:1 1 220px;min-width:0}
-.conflict-file{font-size:13px;font-weight:500;color:var(--text-primary);word-break:break-all}
+.conflict-file{font-size:14px;font-weight:600;color:var(--text-primary);word-break:break-word}
 .conflict-meta{font-size:12px;color:var(--text-secondary);margin-top:2px}
 .conflict-actions{display:flex;gap:8px;flex-shrink:0}
 .conflict-actions .btn{padding:6px 14px;font-size:12px;width:auto}
-.tab-badge{display:inline-block;min-width:18px;padding:0 5px;margin-left:5px;border-radius:9px;background:var(--warning);color:#1A2634;font-size:11px;font-weight:700;line-height:18px;text-align:center;vertical-align:1px}
+.tab-badge{display:inline-block;padding:1px 7px;margin-left:6px;border-radius:999px;background:var(--warning);color:#3A2A00;font-size:11px;font-weight:700;line-height:1.4;vertical-align:1px}
 
 /* ========== УСТРОЙСТВО ========== */
 .device{font-size:11px;color:var(--text-muted);margin-top:2px;text-align:center;line-height:1.4}
@@ -10457,6 +11747,20 @@ body::after {
 .link-input{min-width:0}
 .link-input-row .btn{flex:none}
 .link-input:focus,.link-controls select:focus{outline:none;border-color:var(--accent)}
+.link-saved{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+.link-saved .ls-label{font-size:12px;color:var(--text-muted);margin-right:2px}
+.ls-chip{display:inline-flex;align-items:center;border-radius:999px;background:var(--bg-primary);font-size:12px;overflow:hidden;max-width:100%}
+.ls-chip button{border:0;background:none;color:var(--text-primary);font-family:inherit;font-size:12px;cursor:pointer;padding:5px 4px 5px 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
+.ls-chip button.ls-x{padding:5px 10px 5px 6px;color:var(--text-muted);flex:none;overflow:visible;text-overflow:clip;max-width:none}
+.ls-chip button:first-child{min-width:0;flex:0 1 auto}
+.ls-chip button.ls-x:hover{color:var(--error)}
+.ls-chip .ls-cat{vertical-align:-2px;margin-right:5px;color:var(--accent)}
+.ls-chip.on .ls-cat{color:#fff}
+.ls-chip.on{background:var(--accent)}
+.ls-chip.on button{color:#fff}
+.link-save{flex:none;background:var(--bg-primary);color:var(--text-primary)}
+.link-save:hover{background:var(--bg-hover)}
+.link-save .ls-star{color:var(--warning)}
 .link-hint{color:var(--text-muted);font-size:12px;margin-top:8px;line-height:1.4}
 .link-status{font-size:13px;margin-top:8px;color:var(--text-secondary)}
 .link-status:empty{display:none}
@@ -10488,20 +11792,85 @@ body::after {
 .cat-offer{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0 10px;padding:10px 12px;border:1px solid var(--accent);border-radius:var(--radius);background:var(--bg-primary);font-size:13px;color:var(--text-secondary)}
 .cat-offer span{flex:1;min-width:200px}
 .cat-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0 8px}
-.cat-title{font-weight:600;color:var(--text-primary);flex:1;min-width:0;word-break:break-word}
+.cat-title{font-weight:600;color:var(--text-primary);flex:1;min-width:0;word-break:break-word;font-size:16px}
+.cat-count{font-weight:400;font-size:13px;color:var(--text-muted);white-space:nowrap;margin-left:4px}
+.cat-back{padding:6px 12px;text-transform:none;letter-spacing:0;font-size:13px;background:var(--bg-primary);color:var(--accent);flex:none}
 .cat-search{width:100%;box-sizing:border-box;margin-bottom:8px}
 .cat-kinds{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;font-size:13px;color:var(--text-secondary);margin-bottom:8px}
 .cat-kinds label{display:inline-flex;gap:5px;align-items:center;cursor:pointer;white-space:nowrap}
 .cat-kinds input{accent-color:var(--accent)}
 .cat-list{max-height:460px}
 .cat-have{color:var(--success,#2e7d32)}
-.cat-detail{padding:10px 12px 12px 36px;border-bottom:1px solid var(--border-color);font-size:13px;color:var(--text-secondary);display:flex;gap:12px;flex-wrap:wrap}
-.cat-pic{width:160px;min-height:60px;display:flex;align-items:flex-start;justify-content:center;color:var(--text-muted);font-size:12px}
-.cat-pic img{max-width:160px;max-height:200px;border-radius:6px}
+.cat-detail{padding:10px 12px 12px;margin:8px 10px;background:var(--bg-card);border-radius:8px;font-size:13px;color:var(--text-secondary);display:flex;gap:12px;flex-wrap:wrap}
+.cat-pic{width:160px;min-height:60px;display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--text-muted);font-size:12px}
+.cat-pic-main{display:flex;justify-content:center;min-height:40px}
+.cat-pic img,.cat-pic video{max-width:160px;max-height:200px;border-radius:6px}
+.cat-shots{display:flex;flex-wrap:wrap;gap:4px;justify-content:center}
+.cat-shots button{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--bg-primary);border:1px solid var(--panel-border);white-space:nowrap;color:var(--text-secondary);cursor:pointer;font-family:inherit}
+.cat-shots button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.cat-src{display:flex;gap:0;border-radius:999px;overflow:hidden;max-width:100%}
+.cat-src button{min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:11px;padding:3px 8px;border:0;background:var(--bg-primary);white-space:nowrap;color:var(--text-secondary);cursor:pointer;font-family:inherit}
+.cat-src button.on{background:var(--accent);color:#fff}
+.cat-replace{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;margin-top:4px}
 .cat-info{flex:1;min-width:200px}
 .cat-desc{white-space:pre-line;margin-top:6px;line-height:1.45;color:var(--text-primary)}
 .cat-more{text-align:center;padding:10px}
-@media (max-width:600px){.cat-detail{padding-left:12px}.cat-pic{width:100%;justify-content:flex-start}.cat-kinds label{white-space:normal;align-items:flex-start}}
+.link-row.cat-open{border-bottom:0}
+.cat-detail-wrap{border-bottom:1px solid var(--border-color);padding-bottom:2px}
+.cat-go{cursor:pointer}
+.settings-row .sec-opt{display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:var(--text-primary);font-size:13px;white-space:nowrap}
+.settings-row .sec-opt input{flex:none;min-width:0;width:16px;height:16px;padding:0;margin:0;accent-color:var(--accent);cursor:pointer}
+.cfg-move{display:flex;gap:8px;flex-wrap:wrap}
+.cfg-import{margin-top:6px;padding:12px 14px;background:var(--bg-card);border-radius:var(--radius);font-size:13px;color:var(--text-secondary)}
+.cfg-import label{display:flex;gap:8px;align-items:flex-start;margin:6px 0;cursor:pointer;color:var(--text-primary)}
+.cfg-import input{accent-color:var(--accent);width:16px;height:16px;margin:2px 0 0;flex:none}
+.cfg-import label.off{opacity:0.45;cursor:default}
+.cfg-actions{display:flex;gap:8px;margin-top:10px}
+.cfg-import .cfg-actions .btn:not(.btn-primary){background:var(--bg-primary)}
+@media (max-width:600px){.cfg-move .btn,.cfg-actions .btn{flex:1}}
+.cat-wait{opacity:0.5}
+.cat-filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+.cat-filters select{background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);padding:6px 10px;border-radius:var(--radius);font-size:13px;font-family:inherit;max-width:220px}
+.cat-filters select:disabled,.cat-search:disabled{opacity:0.5}
+.cat-hide{display:inline-flex;gap:5px;align-items:center;font-size:13px;color:var(--text-secondary);cursor:pointer;white-space:nowrap}
+.cat-hide input{accent-color:var(--accent)}
+.cat-mark{display:inline-block;font-size:10px;font-weight:700;line-height:1.5;padding:0 6px;border-radius:999px;text-transform:uppercase;letter-spacing:0.3px;vertical-align:1px;color:#fff;background:var(--success)}
+.cat-mark.chg{background:var(--accent)}
+.cat-onlysel{font-size:12px;padding:5px 12px;border-radius:999px;border:0;background:var(--bg-primary);color:var(--text-secondary);cursor:pointer;font-family:inherit;white-space:nowrap}
+.cat-onlysel.on{background:var(--accent);color:#fff}
+.cat-onlysel:disabled{opacity:0.5;cursor:default}
+.cat-pic-main img{cursor:zoom-in}
+.cat-zoom{position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.88);cursor:zoom-out;user-select:none;touch-action:none;overscroll-behavior:contain}
+html.cat-zoom-open,html.cat-zoom-open body{overflow:hidden}
+.cat-zoom img{position:absolute;left:16px;top:16px;width:calc(100% - 32px);height:calc(100% - 64px);object-fit:contain}
+.cat-zoom-msg{position:absolute;left:16px;right:16px;top:50%;transform:translateY(-50%);text-align:center;color:#fff;font-size:15px;opacity:0.85}
+.cat-zoom-cap{position:absolute;left:0;right:0;bottom:16px;text-align:center;color:#fff;font-size:13px;opacity:0.85}
+.cat-zoom-nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:44px;border-radius:50%;border:0;background:rgba(255,255,255,0.16);color:#fff;font-size:28px;line-height:40px;cursor:pointer;font-family:inherit;padding:0}
+.cat-zoom-nav:hover{background:rgba(255,255,255,0.28)}
+.cat-zoom.nav img{left:68px;width:calc(100% - 136px)}
+.cat-zoom-prev{left:12px}
+.cat-zoom-next{right:12px}
+.cat-views{display:inline-flex;border-radius:999px;overflow:hidden;flex:none}
+.cat-views button{font-size:12px;padding:5px 11px;border:0;background:var(--bg-primary);color:var(--text-secondary);cursor:pointer;font-family:inherit}
+.cat-views button.on{background:var(--accent);color:#fff}
+.cat-list.cat-covers,.cat-list.cat-grid{max-height:min(640px,72vh)}
+.cat-cov{flex:none;width:72px;height:96px;border-radius:6px;overflow:hidden;cursor:pointer;background:var(--bg-primary)}
+.cat-cov img{width:100%;height:100%;object-fit:contain;display:block}
+.cat-rt{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.cat-rt .link-name{flex:none;max-width:100%}
+.cat-rt-meta{font-size:12px;color:var(--text-muted)}
+.cat-rt-desc{font-size:12px;line-height:1.4;color:var(--text-secondary);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.cat-covers .cat-cov{width:90px;height:120px}
+.cat-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));grid-auto-flow:row dense;gap:10px;padding:10px}
+.cat-tile{position:relative;background:var(--bg-card);border-radius:8px;padding:6px;min-width:0}
+.cat-tile.open{box-shadow:0 0 0 2px var(--accent)}
+.cat-tile .cat-cov{width:100%;height:auto;aspect-ratio:3/4;border-radius:6px}
+.cat-tile input{position:absolute;top:10px;left:10px;margin:0;width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+.cat-tile-have{position:absolute;top:9px;right:9px;background:var(--success,#2e7d32);color:#fff;border-radius:999px;font-size:10px;line-height:1.5;padding:0 6px}
+.cat-tile-name{font-size:12px;line-height:1.25;margin-top:5px;max-height:2.5em;overflow:hidden;word-break:break-word;color:var(--accent);cursor:pointer}
+.cat-tile-meta{font-size:11px;color:var(--text-muted);margin-top:2px}
+.cat-tiles .cat-detail{grid-column:1/-1;margin:0}
+@media (max-width:600px){.link-save{padding-left:14px;padding-right:14px}.link-save .ls-word{display:none}.link-save .ls-star{font-size:16px}.conflict-actions{flex:1 1 100%}.conflict-actions .btn{flex:1;padding:9px 14px}.cat-zoom.nav img{left:16px;width:calc(100% - 32px)}.cat-filters select{flex:1 1 40%;max-width:none;min-width:0}.cat-covers .cat-cov{width:72px;height:96px}.cat-rt-meta{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}.cat-tiles{grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;padding:8px}.cat-head .cat-views{order:3;flex:1 1 100%;display:flex}.cat-views button{flex:1;padding-left:6px;padding-right:6px}.cat-title{min-width:140px}.cat-detail{padding-left:12px}.cat-pic{width:100%;align-items:center}.cat-pic-main,.cat-shots{justify-content:center}.cat-offer .btn{flex:1 1 100%}.cat-pic img,.cat-pic video{max-width:100%}.cat-kinds label{white-space:normal;align-items:flex-start}}
 </style>
 </head>
 <body>
@@ -10580,19 +11949,19 @@ body::after {
 </div>
 
     <!-- ОБЩАЯ ПОДПИСЬ -->
-<!-- КОНФЛИКТЫ СОХРАНЕНИЙ / SAVE CONFLICTS (shown only when there are copies) -->
-<div id="conflictsBox" class="conflicts-box" style="display:none">
-    <div class="conflicts-head"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px;color:var(--warning)"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" fill="currentColor"/></svg><span id="conflictsHead"></span></div>
-    <div class="conflicts-hint" id="conflictsHint"></div>
-    <div id="conflictsList"></div>
-</div>
 
-    <div class="sync-note">
-        <p><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" fill="currentColor"/></svg><strong>ВАЖНО:</strong></p>
+    <div class="sync-note folded" id="noteSaves">
+        <p><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" fill="currentColor"/></svg><strong>ВАЖНО</strong><span class="note-short">: выгрузка удаляет из облака сохранения, удалённые на устройстве.</span><span class="note-caret"></span></p>
         <p>• <strong>Загрузка:</strong> Это действие ЗАГРУЗИТ сохранения из облака на устройство. Скачиваются только сохранения, изменённые на других устройствах. Если сохранение удалили на другом устройстве — оно удаляется и здесь. Изменённые на этом устройстве сохранения не заменяются, а отправляются в облако. Если сохранение изменили и здесь, и на другом устройстве — остаётся более новое. Если облако пустое, сохранения с устройства копируются в облако.</p>
         <p>• <strong>Выгрузка:</strong> Это действие ВЫГРУЗИТ сохранения из устройства в облако. Выгружаются только новые или измененные файлы. Если файл удалили на устройстве — он УДАЛЯЕТСЯ из облака. Удаление синхронизируется между устройствами. Изменённые на других устройствах сохранения не перезаписываются, а скачиваются сюда.</p>
         <p>• <strong>Полная синхронизация:</strong> Это действие выполнит ПОЛНУЮ синхронизацию. Сначала ЗАГРУЗИТ сохранения из облака, затем ВЫГРУЗИТ сохранения в облако. Если загрузка не удалась, выгрузка не выполняется.</p>
     </div>
+<!-- КОНФЛИКТЫ СОХРАНЕНИЙ / SAVE CONFLICTS (shown only when there are copies) -->
+<div id="conflictsBox" class="conflicts-box" style="display:none">
+    <div class="conflicts-head"><span class="cf-ico">!</span><span id="conflictsHead"></span><span class="cf-n" id="conflictsCount"></span></div>
+    <div class="conflicts-hint" id="conflictsHint"></div>
+    <div id="conflictsList"></div>
+</div>
      
     <div class="section-title" style="margin-top:20px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM4 12c0-4.42 3.58-8 8-8 1.85 0 3.55.63 4.9 1.69L5.69 16.9C4.63 15.55 4 13.85 4 12zm8 8c-1.85 0-3.55-.63-4.9-1.69L18.31 7.1C19.37 8.45 20 10.15 20 12c0 4.42-3.58 8-8 8z" fill="currentColor"/></svg>Исключения</div>
     <div style="margin-bottom:10px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
@@ -10604,6 +11973,7 @@ body::after {
 
   <!-- Вкладка Ромы -->
 <div id="tab-roms" class="tab-content">
+  <div id="romsSection">
     <div class="section-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" fill="currentColor"/></svg>Ромы</div>
     <div class="actions">
         <button class="btn btn-primary" onclick="runSyncWithProgress('roms_download')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="currentColor"/></svg>Загрузить ромы</button>
@@ -10624,8 +11994,8 @@ body::after {
 </div>
 
     <!-- ОБЩАЯ ПОДПИСЬ -->
-    <div class="sync-note">
-        <p><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" fill="currentColor"/></svg><strong>ВАЖНО:</strong></p>
+    <div class="sync-note folded" id="noteRoms">
+        <p><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" fill="currentColor"/></svg><strong>ВАЖНО</strong><span class="note-short">: выгрузка удаляет из облака ромы, которых нет на устройстве.</span><span class="note-caret"></span></p>
         <p>• <strong>Загрузка ромов:</strong> Это действие ЗАГРУЗИТ ромы из облака на устройство. Файлы на устройстве НЕ УДАЛЯЮТСЯ. Будут загружены только новые или измененные файлы.</p>
         <p>• <strong>Выгрузка ромов:</strong> Это действие УДАЛИТ из облака ромы, которых нет на устройстве. Если на устройстве не хватает каких-то ромов, они исчезнут из облака без возможности восстановления! Рекомендуется сначала ЗАГРУЗИТЬ ромы из облака или сделать бэкап облака.</p>
     </div>
@@ -10639,24 +12009,36 @@ body::after {
     </div>
     <div class="system-list" id="romsList"><div class="loading"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z" fill="currentColor"/></svg> Загрузка систем...</div></div>
 
+  </div>
+  <div id="linkSection">
     <!-- Download from a public link -->
     <div class="section-title" style="margin-top:20px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z" fill="currentColor"/></svg>Скачать по публичной ссылке</div>
     <div class="link-box" id="linkBox">
       <div class="link-input-row">
         <input id="linkUrl" class="link-input" type="url" autocomplete="off" placeholder="Вставьте ссылку: Яндекс.Диск, pCloud, Nextcloud, archive.org" onkeydown="if(event.key==='Enter')linkOpen()">
         <button class="btn btn-primary" id="linkOpenBtn" onclick="linkOpen()">Открыть</button>
+        <button class="btn link-save" id="linkSaveBtn" style="display:none" onclick="linkSaveToggle()"></button>
       </div>
+      <div class="link-saved" id="linkSaved" style="display:none"></div>
       <div class="link-input-row" id="linkPwRow" style="display:none;margin-top:8px">
         <input id="linkPw" class="link-input" type="password" autocomplete="off" placeholder="Пароль ссылки" onkeydown="if(event.key==='Enter')linkOpen()">
       </div>
-      <div class="link-hint">Яндекс.Диск, pCloud, Nextcloud / ownCloud, archive.org. Можно выбрать отдельные файлы и папки. Zip-архив открывается как папка: из него можно взять только нужные файлы. Уже скачанные файлы пропускаются, прерванная загрузка продолжается.</div>
+      <div class="link-hint">Яндекс.Диск, pCloud, Nextcloud / ownCloud, archive.org или прямая ссылка на файл. Можно выбрать отдельные файлы и папки. Zip-архив открывается как папка: из него можно взять только нужные файлы. Уже скачанные файлы пропускаются, прерванная загрузка продолжается.</div>
       <div class="link-status" id="linkStatus"></div>
       <div id="linkBrowser" style="display:none">
         <div class="link-crumbs" id="linkCrumbs"></div>
         <div class="cat-offer" id="catOffer" style="display:none"><span id="catOfferText"></span><button class="btn btn-primary" onclick="catOpenFromOffer()">Открыть как каталог</button></div>
         <div id="catBox" style="display:none">
-          <div class="cat-head"><button class="btn" onclick="catClose()">← Файлы</button><div class="cat-title" id="catTitle"></div></div>
+          <div class="cat-head"><button class="btn cat-back" onclick="catClose()">← Файлы</button><div class="cat-title" id="catTitle"></div><div class="cat-views" id="catViews"><button type="button" data-view="list" onclick="catSetView('list')">Список</button><button type="button" data-view="covers" onclick="catSetView('covers')">С обложками</button><button type="button" data-view="grid" onclick="catSetView('grid')">Плитка</button></div></div>
           <input id="catSearch" class="link-input cat-search" type="search" autocomplete="off" placeholder="Поиск игры" oninput="catRender()">
+          <div class="cat-filters">
+            <select id="catGenre" onchange="catRender()"></select>
+            <select id="catPlayers" onchange="catRender()"></select>
+            <select id="catSort" onchange="catSortChanged()"></select>
+            <label class="cat-hide" id="catNewRow" style="display:none"><input type="checkbox" id="catOnlyNew" onchange="catRender()"><span id="catNewText"></span></label>
+            <label class="cat-hide" id="catHideRow"><input type="checkbox" id="catHideHave" onchange="catRender()"><span id="catHideText"></span></label>
+            <button type="button" class="cat-onlysel" id="catOnlySel" onclick="catToggleSel()"></button>
+          </div>
           <div class="cat-kinds" id="catKinds"></div>
           <div class="link-list cat-list" id="catList"></div>
         </div>
@@ -10684,6 +12066,7 @@ body::after {
         </div>
         <div class="op-cancel-row"><button class="btn btn-danger op-cancel" id="opCancelLink" onclick="cancelOperation()" style="display:none">Отмена</button></div>
     </div>
+  </div>
 </div>
 
   <!-- ВКЛАДКА: НАСТРОЙКИ -->
@@ -10693,6 +12076,12 @@ body::after {
       <select id="settingCloud" onchange="cloudSwitch()"></select>
     </div>
     <div class="settings-hint" id="cloudSwitchHint" style="display:none;color:var(--text-secondary);font-size:12px;margin:-4px 0 10px"><span id="cloudSwitchStatus" style="display:none;color:var(--accent);font-weight:500"></span><span id="cloudSwitchText">Переключение между этим облаком и прежним, которое было подключено до смены облака в центре управления (пункт 16). Сохранения на устройстве объединяются с выбранным облаком: чужие скачаются, свои загрузятся, ничего не удалится. Подключить другое облако можно в центре управления.</span></div>
+    <div class="settings-row">
+      <label>Разделы:</label>
+      <label class="sec-opt"><input type="checkbox" id="secRoms" checked onchange="saveSections()">Ромы</label>
+      <label class="sec-opt"><input type="checkbox" id="secLink" checked onchange="saveSections()">Загрузка по ссылке</label>
+    </div>
+    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px">Показывать в веб-интерфейсе: ромы (выбор систем, загрузка и выгрузка ромов) и загрузку по публичной ссылке с каталогом игр.</div>
     <div class="settings-row">
       <label>Интервал (сек):</label>
       <input type="number" id="settingInterval" value="0" min="0" step="60">
@@ -10748,6 +12137,14 @@ body::after {
     </div>
     <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px"><b>Обычный:</b> записываются результаты синхронизаций (по ним строится статистика).<br><b>Подробный (debug):</b> дополнительно отправленные, полученные и переименованные файлы, время каждого этапа и запросов к облаку. Включайте, когда ищете причину медленной синхронизации.</div>
     <button class="btn btn-primary" onclick="saveSettings()">Сохранить настройки</button>
+    <div style="margin-top:24px"><div class="section-title">Перенос настроек</div></div>
+    <div class="cfg-move">
+      <button class="btn" onclick="cfgExport()">Экспорт</button>
+      <button class="btn" onclick="document.getElementById('cfgFile').click()">Импорт</button>
+      <input type="file" id="cfgFile" accept=".conf,.txt,text/plain" style="display:none" onchange="cfgPick(this)">
+    </div>
+    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:6px 0 10px">Экспорт скачивает файл настроек этого устройства (sync.conf), импорт берёт из такого файла только то, что вы отметите. Подключения к облаку в нём нет.</div>
+    <div class="cfg-import" id="cfgImport" style="display:none"></div>
   </div>
 
   <!-- ЛОГИ -->
@@ -11521,7 +12918,7 @@ async function refreshStats() {
 // ========== ЗАПУСК ==========
 
 // ========== SAVE CONFLICTS ==========
-const CONF_T = {"head": "Конфликты сохранений", "hint": "Эти сохранения изменились на двух устройствах. Синхронизация оставила более новую версию, а другую сохранила здесь. «Вернуть» сделает выбранную версию текущей на всех устройствах; текущая версия при этом тоже сохранится здесь.", "from": "версия с {dev}", "left": "хранится до {until}", "last": "удалится при следующей синхронизации", "notHere": "на этом устройстве этого файла нет", "notSynced": "эта система не синхронизируется на этом устройстве", "restore": "Вернуть", "del": "Удалить", "confirmRestore": "Вернуть версию {file} с {dev} ({time})?\\n\\nОна станет текущей на всех устройствах, а текущая версия сохранится в конфликтах.\\nЕсли эта игра сейчас запущена, сначала выйдите из неё.", "confirmDel": "Удалить копию {file} ({dev}, {time})?\\nВернуть её будет нельзя.", "phase": "Возврат версии", "deleted": "Копия удалена", "badge": "Есть конфликты сохранений"};
+const CONF_T = {"head": "Конфликты сохранений", "hint": "Эти сохранения изменились на двух устройствах. Синхронизация оставила более новую версию, а другую сохранила здесь. «Вернуть» сделает выбранную версию текущей на всех устройствах; текущая версия при этом тоже сохранится здесь.", "from": "версия с {dev}", "left": "хранится до {until}", "last": "удалится при следующей синхронизации", "notHere": "на этом устройстве этого файла нет", "notSynced": "эта система не синхронизируется на этом устройстве", "restore": "Вернуть", "del": "Удалить", "confirmRestore": "Вернуть версию {file} с {dev} ({time})?\\n\\nОна станет текущей на всех устройствах, а текущая версия сохранится в конфликтах.\\nЕсли эта игра сейчас запущена, сначала выйдите из неё.", "confirmDel": "Удалить копию {file} ({dev}, {time})?\\nВернуть её будет нельзя.", "phase": "Возврат версии", "deleted": "Копия удалена", "badge": "Есть конфликты сохранений", "short": "Версия с другого устройства сохранена здесь — верните её или удалите.", "more": "Подробнее ▸", "less": "Скрыть ▴", "kindState": "быстрое сохранение", "kindSave": "сохранение игры"};
 
 async function loadConflicts() {
   const box = document.getElementById('conflictsBox');
@@ -11532,8 +12929,9 @@ async function loadConflicts() {
   badge.style.display = items.length ? '' : 'none';
   badge.textContent = items.length;
   if (!items.length) { box.style.display = 'none'; return; }
-  document.getElementById('conflictsHead').textContent = CONF_T.head + ' (' + items.length + ')';
-  document.getElementById('conflictsHint').textContent = CONF_T.hint;
+  document.getElementById('conflictsHead').textContent = CONF_T.head;
+  document.getElementById('conflictsCount').textContent = items.length;
+  conflictHint();
   window._conflicts = items;
   document.getElementById('conflictsList').innerHTML = items.map((c, i) => {
     const meta = [CONF_T.from.replace('{dev}', c.dev), c.time,
@@ -11541,15 +12939,39 @@ async function loadConflicts() {
     if (!c.keep) meta.pop();           // this device does not remove copies: other devices decide
     if (!c.synced) meta.push(CONF_T.notSynced);
     else if (!c.here) meta.push(CONF_T.notHere);
+    const g = conflictGame(c);
     return '<div class="conflict-row"><div class="conflict-info">' +
-      '<div class="conflict-file">' + escapeHtml(c.file) + '</div>' +
+      '<div class="conflict-file" title="' + escapeHtml(c.file) + '">' + escapeHtml(g.name) + '</div>' +
+      '<div class="cf-chips">' + (g.sys ? '<span class="cf-chip">' + escapeHtml(g.sys) + '</span>' : '') +
+      '<span class="cf-chip">' + escapeHtml(g.kind) + '</span></div>' +
       '<div class="conflict-meta">' + escapeHtml(meta.join(' · ')) + '</div></div>' +
       '<div class="conflict-actions">' +
       '<button class="btn btn-primary" onclick="conflictRestore(' + i + ')"' + (c.synced ? '' : ' disabled') + '>' + CONF_T.restore + '</button>' +
-      '<button class="btn btn-danger" onclick="conflictDelete(' + i + ')">' + CONF_T.del + '</button>' +
+      '<button class="btn cf-del" onclick="conflictDelete(' + i + ')">' + CONF_T.del + '</button>' +
       '</div></div>';
   }).join('');
   box.style.display = '';
+}
+
+// "nes/Adventure Island (U).state" -> NES, "state", "Adventure Island (U)"
+function conflictGame(c) {
+  const parts = c.file.split('/');
+  let name = parts[parts.length - 1];
+  const dot = name.lastIndexOf('.');
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+  if (dot > 0) name = name.slice(0, dot);
+  const state = ext.startsWith('state') || ext === 'auto' || name.toLowerCase().endsWith('.state');
+  if (name.toLowerCase().endsWith('.state')) name = name.slice(0, -6);
+  return { sys: parts.length > 1 ? parts[0] : '', kind: state ? CONF_T.kindState : CONF_T.kindSave, name: name };
+}
+
+// the short hint; "More" shows the whole explanation
+let conflictHintOpen = false;
+function conflictHint() {
+  const el = document.getElementById('conflictsHint');
+  el.innerHTML = escapeHtml(CONF_T.short) + '<button type="button" class="cf-more" onclick="conflictHintOpen = !conflictHintOpen; conflictHint()">' +
+    escapeHtml(conflictHintOpen ? CONF_T.less : CONF_T.more) + '</button>' +
+    (conflictHintOpen ? '<span class="cf-long">' + escapeHtml(CONF_T.hint) + '</span>' : '');
 }
 
 function conflictText(tpl, c) {
@@ -11584,7 +13006,7 @@ loadConflicts();
 
 // Автообновление (настройки НЕ обновляются)
 // ========== DOWNLOAD FROM A PUBLIC LINK ==========
-const LINK_T = {"enterUrl": "Сначала вставьте ссылку", "loading": "Получаю список файлов… для больших папок это может занять минуту.", "needPw": "Ссылка защищена паролем: введите пароль и нажмите «Открыть».", "empty": "По ссылке нет файлов.", "files": "файлов", "nothingSel": "Отметьте файлы или папки, которые нужно скачать", "selected": "Выбрано: {n}", "free": "свободно на карте: {free}", "noSpace": "не хватает места", "contents": "Содержимое «{name}» будет помещено в {dest}", "items": "Выбранное будет помещено в {dest}", "chooseDest": "— выберите систему —", "needDest": "Выберите, куда положить файлы", "phase": "Загрузка по ссылке", "done": "Загрузка по ссылке завершена", "failed": "Загрузка по ссылке не удалась", "unavailable": "Загрузка по ссылке недоступна на этом устройстве (нет python3 или link_download.py).", "selectAll": "Выбрать все", "root": "корень", "nfiles": "файлов: {n}", "grpDeviceFiles": "Системы с играми (ром-файлами)", "grpDeviceOther": "Системы без игр", "grpCloudFiles": "Системы в облаке", "grpCloudOther": "Добавить новую систему в облако", "freeCloud": "свободно в облаке: {free}", "cloudLabel": "облако: GameROMs/{sys}", "cloudNote": "Потом перенесите на устройство: Ромы → выбрать систему → Загрузить ромы.", "cloudUnavailable": "Облако недоступно: Save Sync не настроен или rclone не запускается.", "loadingDests": "загрузка…", "zipMeta": "архив · нажмите, чтобы открыть", "zipReading": "Читаю архив «{name}»…", "zipContents": "Архив «{name}» будет распакован в {dest}", "zipItems": "Выбранное из архива будет распаковано в {dest}", "zipAsIs": "Архивы скачаются как есть, без распаковки. Картриджные приставки обычно запускают .zip/.7z сами. Нужны отдельные игры — откройте zip или включите «Распаковать архивы».", "unpackLabel": "Распаковать архивы после скачивания ({kinds})", "arcMeta": "архив {kind}", "unpackYes": "{kinds}: будут распакованы в папку системы, сами архивы удалятся", "unpackCannot": "{kinds}: на этом устройстве нечем распаковать — скачаются как есть", "unpackCloud": "Для облака: файлы из .zip берутся прямо из архива, а .7z/.rar сначала ненадолго скачиваются на карту, распаковываются и выгружаются — нужно свободное место примерно в 3 раза больше архива."};
+const LINK_T = {"saveCat": "Сохранить каталог", "savedCat": "Каталог игр: открывается сразу списком игр", "savedLabel": "Сохранённые:", "save": "Сохранить", "saved": "Сохранено", "savePrompt": "Название ссылки", "unsave": "Убрать «{name}» из сохранённых?", "savedOk": "Ссылка сохранена", "enterUrl": "Сначала вставьте ссылку", "loading": "Получаю список файлов… для больших папок это может занять минуту.", "needPw": "Ссылка защищена паролем: введите пароль и нажмите «Открыть».", "empty": "По ссылке нет файлов.", "files": "файлов", "nothingSel": "Отметьте файлы или папки, которые нужно скачать", "selected": "Выбрано: {n}", "free": "свободно на карте: {free}", "noSpace": "не хватает места", "contents": "Содержимое «{name}» будет помещено в {dest}", "items": "Выбранное будет помещено в {dest}", "chooseDest": "— выберите систему —", "needDest": "Выберите, куда положить файлы", "phase": "Загрузка по ссылке", "done": "Загрузка по ссылке завершена", "failed": "Загрузка по ссылке не удалась", "unavailable": "Загрузка по ссылке недоступна на этом устройстве (нет python3 или link_download.py).", "selectAll": "Выбрать все", "root": "корень", "nfiles": "файлов: {n}", "grpDeviceFiles": "Системы с играми (ром-файлами)", "grpDeviceOther": "Системы без игр", "grpCloudFiles": "Системы в облаке", "grpCloudOther": "Добавить новую систему в облако", "freeCloud": "свободно в облаке: {free}", "cloudLabel": "облако: GameROMs/{sys}", "cloudNote": "Потом перенесите на устройство: Ромы → выбрать систему → Загрузить ромы.", "cloudUnavailable": "Облако недоступно: Save Sync не настроен или rclone не запускается.", "loadingDests": "загрузка…", "zipMeta": "архив · нажмите, чтобы открыть", "zipReading": "Читаю архив «{name}»…", "zipContents": "Архив «{name}» будет распакован в {dest}", "zipItems": "Выбранное из архива будет распаковано в {dest}", "zipAsIs": "Архивы скачаются как есть, без распаковки. Картриджные приставки обычно запускают .zip/.7z сами. Нужны отдельные игры — откройте zip или включите «Распаковать архивы».", "unpackLabel": "Распаковать архивы после скачивания ({kinds})", "arcMeta": "архив {kind}", "unpackYes": "{kinds}: будут распакованы в папку системы, сами архивы удалятся", "unpackCannot": "{kinds}: на этом устройстве нечем распаковать — скачаются как есть", "unpackCloud": "Для облака: файлы из .zip берутся прямо из архива, а .7z/.rar сначала ненадолго скачиваются на карту, распаковываются и выгружаются — нужно свободное место примерно в 3 раза больше архива."};
 const LINK_ICON_DIR = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" fill="currentColor"/></svg>';
 const LINK_ICON_ZIP = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-2 6h-2v2h2v2h-2v2h-2v-2h2v-2h-2v-2h2v-2h-2V8h2v2h2v2z" fill="currentColor"/></svg>';
 const LINK_ICON_FILE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm-1 7V3.5L18.5 9H13z" fill="currentColor"/></svg>';
@@ -11666,8 +13088,12 @@ async function linkOpen() {
     const pw = document.getElementById('linkPw').value;
     const btn = document.getElementById('linkOpenBtn');
     btn.disabled = true;
-    linkSetStatus(LINK_T.loading, false);
-    document.getElementById('linkBrowser').style.display = 'none';
+    // a saved list of this link is on the screen: it stays while the link is read
+    const keep = !!(catState && catState.cached && linkState.url === url);
+    if (!keep) {
+        linkSetStatus(LINK_T.loading, false);
+        document.getElementById('linkBrowser').style.display = 'none';
+    }
     const res = await apiFetch('/link/list', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url, password: pw })
@@ -11679,18 +13105,143 @@ async function linkOpen() {
         document.getElementById('linkPw').focus();
         return;
     }
-    if (res.error || !res.root) { linkSetStatus(res.error || 'Error', true); return; }
+    if (res.error || !res.root) {
+        if (keep && catState && catState.cached) { linkSetStatus(CAT_T.offline + ' ' + (res.error || ''), true); return; }
+        linkSetStatus(res.error || 'Error', true); linkSavedRender(); return;
+    }
     if (res.root.dir && !res.root.files) { linkSetStatus(LINK_T.empty, true); return; }
-    linkState = { url: url, service: res.service, root: res.root, stack: [res.root], password: pw,
+    linkState = { url: url, service: res.service, root: res.root, stack: [res.root], password: pw, direct: !!res.direct,
                   target: linkState.target, dests: linkState.dests, probe: null, destManual: false };
-    catState = null;
-    catShow(false);
-    linkSetStatus('', false);
+    const still = keep && catState && catState.cached;
+    if (!still) {
+        catState = null;
+        catShow(false);
+        linkSetStatus('', false);
+    }
     if (!pw) document.getElementById('linkPwRow').style.display = 'none';
     document.getElementById('linkBrowser').style.display = 'block';
     linkRender();
     catProbe();
     linkLoadDests(linkState.target).then(() => { linkFillDests(); linkUpdateSummary(); });
+    linkSavedRender();
+    // a saved link with a catalog: the catalog opens right away
+    const want = linkPendingCat;
+    linkPendingCat = null;
+    if (want && want.url === url && want.dir) catOpen(want.dir === '/' ? '' : want.dir);
+    else if (still) linkSetStatus('', false);
+}
+
+// ---- saved links (sync.conf, WEB_LINKS)
+let linkSaved = [];
+const LS_CAT_ICON = '<svg class="ls-cat" width="13" height="13" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5" fill="currentColor"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5" fill="currentColor"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5" fill="currentColor"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5" fill="currentColor"/></svg>';
+let linkPendingCat = null;
+
+async function linkSavedLoad() {
+    const res = await apiFetch('/links/saved');
+    linkSaved = (res && res.links) || [];
+    linkSavedRender();
+}
+
+function linkSavedRender() {
+    const box = document.getElementById('linkSaved');
+    const cur = linkState.url;
+    box.style.display = linkSaved.length ? 'flex' : 'none';
+    box.innerHTML = '<span class="ls-label">' + escapeHtml(LINK_T.savedLabel) + '</span>' + linkSaved.map((l, i) =>
+        '<span class="ls-chip' + (linkSavedIsCur(l) ? ' on' : '') + '" title="' + escapeHtml(l.url) + '">' +
+        // a saved catalog (a collection with gamelist.xml) gets the catalog icon
+        '<button type="button" onclick="linkSavedOpen(' + i + ')"' + (l.dir ? ' title="' + escapeHtml(LINK_T.savedCat) + '"' : '') + '>' +
+        (l.dir ? LS_CAT_ICON : '') + escapeHtml(l.name) + '</button>' +
+        '<button type="button" class="ls-x" onclick="linkSavedRemove(' + i + ')">×</button></span>').join('');
+    const btn = document.getElementById('linkSaveBtn');
+    // a direct link to a file is temporary (signed links expire): not offered for saving
+    const open = !!(linkState.url && linkState.root) && !linkState.direct;
+    btn.style.display = open ? '' : 'none';
+    const st = linkSavedState();
+    const word = st.on ? LINK_T.saved : catState ? LINK_T.saveCat : LINK_T.save;
+    // on a phone only the star is shown, so the link field keeps its width
+    btn.innerHTML = '<span class="ls-star">' + (st.on ? '★' : '☆') + '</span><span class="ls-word"> ' + escapeHtml(word) + '</span>';
+    btn.title = word;
+}
+
+// what is open now: a catalog ('/' = at the top of the link) or the files ('')
+function linkSavedDir() { return catState ? (catState.dir || '/') : ''; }
+
+function linkSavedIsCur(l) {
+    if (l.url !== linkState.url) return false;
+    return catState ? (l.dir || '') === linkSavedDir() : true;
+}
+
+// {on: saved as it is open now, at: that entry, plain: the same link saved without a catalog}
+function linkSavedState() {
+    const url = linkState.url;
+    const plain = linkSaved.findIndex(l => l.url === url && !l.dir);
+    if (catState) {
+        const at = linkSaved.findIndex(l => l.url === url && l.dir === linkSavedDir());
+        return { on: at >= 0, at: at, plain: plain };
+    }
+    // the files of a link saved only as catalogs: counted as saved
+    const at = plain >= 0 ? plain : linkSaved.findIndex(l => l.url === url);
+    return { on: at >= 0, at: at, plain: plain };
+}
+
+async function linkSavedOpen(i) {
+    const l = linkSaved[i];
+    if (!l) return;
+    document.getElementById('linkUrl').value = l.url;
+    document.getElementById('linkPw').value = '';
+    linkPendingCat = { url: l.url, dir: l.dir || '' };
+    if (l.dir) {
+        // a saved catalog: its saved list is shown at once, the collection is read meanwhile
+        const res = await apiFetch('/link/catalog_cached', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: l.url, password: '', dir: l.dir })
+        });
+        if (res && res.games && linkPendingCat && linkPendingCat.url === l.url) {
+            linkState = { url: l.url, service: res.service || '', root: null, stack: [], password: '', direct: false,
+                          target: linkState.target, dests: linkState.dests, probe: null, destManual: false };
+            catShowCached(res);
+            linkLoadDests(linkState.target).then(() => { linkFillDests(); if (catState) catSummary(); });
+        }
+    }
+    linkOpen();
+}
+
+async function linkSavedPut(list) {
+    const res = await apiFetch('/links/saved', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ links: list })
+    });
+    if (!res || res.error) { showToast((res && res.error) || 'Error', 'error'); return false; }
+    linkSaved = res.links || [];
+    linkSavedRender();
+    return true;
+}
+
+async function linkSavedRemove(i) {
+    const l = linkSaved[i];
+    if (!l || !confirm(LINK_T.unsave.replace('{name}', l.name))) return;
+    await linkSavedPut(linkSaved.filter((_, j) => j !== i));
+}
+
+// the open link: saved (with the catalog folder when a catalog is open) or removed
+async function linkSaveToggle() {
+    const url = linkState.url;
+    const st = linkSavedState();
+    if (st.on) { linkSavedRemove(st.at); return; }
+    const root = (linkState.root && linkState.root.name) || linkState.service;
+    const def = catState ? root + ' · ' + catState.title : root;
+    const name = prompt(LINK_T.savePrompt, def);
+    if (name === null) return;
+    const item = { name: name.trim() || def, url: url, dir: linkSavedDir() };
+    // a catalog of a link saved without one: that entry becomes the catalog (no second entry)
+    const list = catState && st.plain >= 0 ? linkSaved.map((l, j) => j === st.plain ? item : l) : linkSaved.concat([item]);
+    if (await linkSavedPut(list)) {
+        showToast(LINK_T.savedOk);
+        if (catState) apiFetch('/link/catalog_seen', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url, dir: item.dir, games: catState.games.map(g => [g.path, g.size]) })
+        });
+    }
 }
 
 function linkCurrent() { return linkState.stack[linkState.stack.length - 1]; }
@@ -11945,7 +13496,7 @@ function linkFinished(data) {
 // A folder with gamelist.xml (EmulationStation) is shown as a list of games: names,
 // descriptions, covers. The chosen games are downloaded with only their own media and
 // added to gamelist.xml on the device.
-const CAT_T = {"found": "В «{name}» есть описание игр (gamelist.xml): их можно выбрать по списку с обложками.", "maybe": "Похоже на сборку игр в архиве: если внутри есть gamelist.xml, её можно открыть как каталог.", "open": "Открыть как каталог", "reading": "Читаю список игр… для больших сборок это может занять минуту.", "title": "{name} · игр: {n}", "selectShown": "Выбрать показанные ({n})", "have": "✓ на устройстве", "noGames": "Ничего не найдено", "media": "Медиа:", "nothingSel": "Отметьте игры, которые нужно скачать", "selected": "Выбрано игр: {n} · игры {roms} + медиа {media} = {total}", "dest": "Игры, их медиа и записи в gamelist.xml будут добавлены в roms/{dest}", "destNone": "Выберите систему, куда положить игры", "recalboxNote": "На Recalbox после скачивания появится окно «Список игр изменён!» — нажмите «Обновить». Пункт меню «Обновить списки игр» для этого не используйте: он перезапишет описания.", "destCloud": "Игры, их медиа и записи в gamelist.xml будут добавлены в {dest}", "cloudVideo": "Видео попадёт на устройства, только если в ромах выбрано «Медиа: с видео»", "cloudMedia": "Медиа попадут на устройства, только если в ромах включено «Медиа»", "noMedia": "Медиа не выбраны: игры появятся без обложек", "loadingPic": "Загружаю картинку…", "noPic": "Нет картинки", "genre": "Жанр", "players": "Игроков", "developer": "Разработчик", "publisher": "Издатель", "file": "Файл", "lang": "Язык", "region": "Регион", "more": "Показать ещё ({n})", "notShown": " (не показывается в EmulationStation)", "kinds": {"thumbnail": "Обложки", "image": "Изображение", "marquee": "Логотипы", "wheel": "Логотипы (wheel)", "boxart": "Обложки (доп.)", "boxback": "Задние обложки", "cartridge": "Картриджи", "titleshot": "Заставки", "screenshot": "Скриншоты", "fanart": "Фоны", "mix": "Коллажи", "map": "Карты", "bezel": "Рамки", "video": "Видео", "manual": "Руководства", "magazine": "Журналы"}};
+const CAT_T = {"found": "В «{name}» есть описание игр (gamelist.xml): их можно выбрать по списку с обложками.", "maybe": "Похоже на сборку игр в архиве: если внутри есть gamelist.xml, её можно открыть как каталог.", "open": "Открыть как каталог", "reading": "Читаю список игр… для больших сборок это может занять минуту.", "title": "{name} · игр: {n}", "count": "игр: {n}", "selectShown": "Выбрать показанные ({n})", "have": "✓ на устройстве", "noGames": "Ничего не найдено", "media": "Медиа:", "nothingSel": "Отметьте игры, которые нужно скачать", "selected": "Выбрано игр: {n} · игры {roms} + медиа {media} = {total}", "dest": "Игры, их медиа и записи в gamelist.xml будут добавлены в roms/{dest}", "destNone": "Выберите систему, куда положить игры", "recalboxNote": "На Recalbox после скачивания появится окно «Список игр изменён!» — нажмите «Обновить». Пункт меню «Обновить списки игр» для этого не используйте: он перезапишет описания.", "destCloud": "Игры, их медиа и записи в gamelist.xml будут добавлены в {dest}", "cloudVideo": "Видео попадёт на устройства, только если в ромах выбрано «Медиа: с видео»", "cloudMedia": "Медиа попадут на устройства, только если в ромах включено «Медиа»", "noMedia": "Медиа не выбраны: игры появятся без обложек", "loadingPic": "Загружаю картинку…", "noPic": "Нет картинки", "fromDevice": "С устройства", "fromLink": "Из сборки", "replaceMedia": "Заменить медиа", "replaceDesc": "Заменить описание", "replaceHint": "Для игр, которые уже есть на устройстве: медиа и описание из сборки заменят свои (название, «избранное» и число запусков останутся)", "replaceNote": "Для игр, которые уже есть на устройстве, будет заменено из сборки: {what}", "keepNote": "Для игр, которые уже есть на устройстве, их медиа и описание останутся, добавится только недостающее", "whatMedia": "медиа", "whatDesc": "описание", "picFailed": "Картинка не загрузилась", "shot": {"thumbnail": "Обложка", "boxart": "Обложка", "image": "Изображение", "screenshot": "Скриншот", "mix": "Коллаж", "titleshot": "Заставка", "fanart": "Фон"}, "video": "▶ Видео · {size}", "loadingVideo": "Загружаю видео…", "noVideo": "Видео не загрузилось", "genre": "Жанр", "players": "Игроков", "developer": "Разработчик", "publisher": "Издатель", "file": "Файл", "lang": "Язык", "region": "Регион", "allGenres": "Все жанры", "anyPlayers": "Игроки: все", "players1": "1 игрок", "playersN": "от {n} игроков", "hideHave": "Нет на устройстве", "onlySel": "Выбранные ({n})", "sorts": {"col": "Как в сборке", "name": "По названию", "yearAsc": "Сначала старые", "yearDesc": "Сначала новые", "sizeAsc": "Сначала маленькие", "sizeDesc": "Сначала большие"}, "markNew": "новое", "markChanged": "обновлено", "onlyNew": "Новое и обновлённое ({n})", "checking": "Показан сохранённый список. Проверяю обновления сборки…", "offline": "Сборка не ответила — показан сохранённый список, скачивание недоступно.", "waitCheck": "Дождитесь, пока сборка будет проверена", "more": "Показать ещё ({n})", "notShown": " (не показывается в EmulationStation)", "kinds": {"thumbnail": "Обложки", "image": "Изображение", "marquee": "Логотипы", "wheel": "Логотипы (wheel)", "boxart": "Обложки (доп.)", "boxback": "Задние обложки", "cartridge": "Картриджи", "titleshot": "Заставки", "screenshot": "Скриншоты", "fanart": "Фоны", "mix": "Коллажи", "map": "Карты", "bezel": "Рамки", "video": "Видео", "manual": "Руководства", "magazine": "Журналы"}};
 const CAT_SKIP = ['media', 'images', 'videos', 'manuals', 'downloaded_images', 'downloaded_videos'];
 const CAT_KIND_ORDER = ['thumbnail', 'image', 'marquee', 'wheel', 'boxart', 'screenshot', 'titleshot', 'mix',
                         'cartridge', 'fanart', 'boxback', 'bezel', 'map', 'video', 'manual', 'magazine'];
@@ -11955,6 +13506,8 @@ const CAT_KIND_OFF = ['video', 'manual', 'magazine'];
 const CAT_ES_TAGS = ['image', 'thumbnail', 'marquee', 'video', 'fanart', 'titleshot', 'manual', 'magazine',
                      'map', 'bezel', 'cartridge', 'boxart', 'boxback', 'wheel', 'mix'];
 const CAT_PIC_ORDER = ['thumbnail', 'image', 'boxart', 'screenshot', 'mix', 'titleshot', 'marquee', 'wheel', 'cartridge', 'fanart'];
+// what shows the game itself (logos, cartridges, bezels and folder pictures do not)
+const CAT_GALLERY = ['thumbnail', 'boxart', 'image', 'screenshot'];
 const CAT_PAGE = 300;
 let catState = null;
 let catOfferPath = null;
@@ -12027,43 +13580,103 @@ async function catProbe() {
 }
 
 async function catOpen(path) {
+    const prev = catState && catState.cached ? catState : null;     // the saved list on the screen
     document.getElementById('catOffer').style.display = 'none';
-    linkSetStatus(CAT_T.reading, false);
+    if (!prev) linkSetStatus(CAT_T.reading, false);
     const res = await apiFetch('/link/catalog', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: linkState.url, password: linkState.password, path: path })
     });
     if (!res || res.error || !res.games) {
+        if (prev && catState === prev) { linkSetStatus(CAT_T.offline, true); return; }
         linkSetStatus((res && res.error) || 'Error', true);
         catOfferUpdate(linkCurrent());
         return;
     }
+    if (prev && catState !== prev) return;                          // another catalog meanwhile
     linkSetStatus('', false);
+    catApply(res, prev);
+}
+
+// the saved list of a saved catalog, shown at once (the collection is checked meanwhile)
+function catShowCached(res) {
+    linkSetStatus(CAT_T.checking, false);
+    document.getElementById('linkBrowser').style.display = 'block';
+    catApply(res, null);
+}
+
+function catApply(res, prev) {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem('ss_cat_kinds2') || 'null'); } catch (e) { saved = null; }
     const allKinds = res.kinds || {};
     const esTags = res.es_media || CAT_ES_TAGS;
     const shown = {};
     Object.keys(allKinds).forEach(k => { if (esTags.includes(k)) shown[k] = allKinds[k]; });
-    res.games.forEach(g => Object.keys(g.media).forEach(k => { if (!esTags.includes(k)) delete g.media[k]; }));
+    // what the details may show (a screenshot too) is kept apart: downloads get only what ES shows
+    // a saved catalog: what is new and what changed since it was opened last time
+    const seenNew = new Set((res.seen && res.seen.new) || []), seenChg = new Set((res.seen && res.seen.changed) || []);
+    res.games.forEach(g => {
+        g.isNew = seenNew.has(g.path);
+        g.isChg = seenChg.has(g.path);
+    });
+    res.games.forEach(g => {
+        g.look = {};
+        Object.keys(g.media).forEach(k => {
+            if (CAT_GALLERY.includes(k) || k === 'video') g.look[k] = g.media[k];
+            if (!esTags.includes(k)) delete g.media[k];
+        });
+    });
     const kinds = Object.keys(shown);
     const on = new Set(kinds.filter(k => saved && saved[k] !== undefined ? saved[k] : !CAT_KIND_OFF.includes(k)));
-    catState = { dir: res.dir, title: res.title, system: res.system, games: res.games, kinds: shown,
-                 on: on, sel: new Set(), open: null, pics: {}, pending: {}, limit: CAT_PAGE, syncMedia: 'false',
+    const sizes = {};
+    res.games.forEach(g => [g.media, g.look].forEach(m => Object.keys(m || {}).forEach(k => { sizes[m[k][0]] = m[k][1] || 0; })));
+    catState = { dir: res.dir, title: res.title, system: res.system, games: res.games, kinds: shown, sizes: sizes, cached: !!res.cached, coverRetry: {},
+                 on: on, sel: new Set(), open: null, pics: {}, pending: {}, failed: {}, view: {}, local: {}, devReady: {}, devInfo: {}, source: {}, sid: res.sid || '', cover: {}, coverVis: new Set(), devCovers: {}, replaceMedia: false, replaceDesc: false, limit: CAT_PAGE, syncMedia: 'false',
                  recalbox: !!res.es_media };
     // the system folder is picked automatically when it exists (on the device or in the cloud)
     linkFillDests();
     apiFetch('/config').then(cfg => { if (catState && cfg) { catState.syncMedia = cfg.ROMS_SYNC_MEDIA || 'false'; catSummary(); } });
-    document.getElementById('catSearch').value = '';
+    if (prev) {
+        // the checked list replaces the saved one: what was chosen on it stays
+        const at = {};
+        res.games.forEach((g, i) => { at[g.path] = i; });
+        prev.sel.forEach(p => { if (p in at) catState.sel.add(p); });
+        if (prev.open !== null && prev.games[prev.open] && prev.games[prev.open].path in at) catState.open = at[prev.games[prev.open].path];
+        Object.keys(prev.cover).forEach(i => { const g = prev.games[i]; if (g && g.path in at && prev.cover[i]) catState.cover[at[g.path]] = prev.cover[i]; });
+        ['pics', 'local', 'devReady', 'devInfo', 'devCovers'].forEach(k => { catState[k] = prev[k]; });
+        catState.replaceMedia = prev.replaceMedia;
+        catState.replaceDesc = prev.replaceDesc;
+        catState.limit = prev.limit;
+        const keep = {};
+        ['catGenre', 'catPlayers', 'catSort'].forEach(id => { keep[id] = document.getElementById(id).value; });
+        const hide = document.getElementById('catHideHave').checked;
+        catFillFilters();
+        Object.keys(keep).forEach(id => { const el = document.getElementById(id); if (Array.from(el.options).some(o => o.value === keep[id])) el.value = keep[id]; });
+        document.getElementById('catHideHave').checked = hide;
+    } else {
+        document.getElementById('catSearch').value = '';
+        catFillFilters();
+    }
+    const lst = document.getElementById('catList');
+    if (!lst.dataset.zoom) {
+        lst.dataset.zoom = '1';
+        lst.addEventListener('click', e => {
+            const im = e.target.closest('.cat-pic-main img');
+            const pic = im && im.closest('.cat-pic');
+            if (pic) catZoom(parseInt(pic.id.slice(6)), im.getAttribute('src'));
+        });
+    }
     catShow(true);
     catRenderKinds();
     catRender();
+    linkSavedRender();
 }
 
 function catClose() {
     catState = null;
     catShow(false);
     linkRender();
+    linkSavedRender();
 }
 
 function catRenderKinds() {
@@ -12072,10 +13685,18 @@ function catRenderKinds() {
         const ia = CAT_KIND_ORDER.indexOf(a), ib = CAT_KIND_ORDER.indexOf(b);
         return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
     });
-    if (!kinds.length) { box.innerHTML = ''; return; }
-    box.innerHTML = '<span>' + escapeHtml(CAT_T.media) + '</span>' + kinds.map(k =>
-        '<label><input type="checkbox" data-kind="' + escapeHtml(k) + '"' + (catState.on.has(k) ? ' checked' : '') + '>' +
-        escapeHtml((CAT_T.kinds[k] || k) + ' · ' + formatBytes(catState.kinds[k].size)) + '</label>').join('');
+    const replace = '<div class="cat-replace" title="' + escapeHtml(CAT_T.replaceHint) + '">' +
+        '<label><input type="checkbox" id="catReplaceMedia"' + (catState.replaceMedia ? ' checked' : '') + '>' + escapeHtml(CAT_T.replaceMedia) + '</label>' +
+        '<label><input type="checkbox" id="catReplaceDesc"' + (catState.replaceDesc ? ' checked' : '') + '>' + escapeHtml(CAT_T.replaceDesc) + '</label></div>';
+    if (!kinds.length) {
+        box.innerHTML = replace;
+    } else {
+        box.innerHTML = '<span>' + escapeHtml(CAT_T.media) + '</span>' + kinds.map(k =>
+            '<label><input type="checkbox" data-kind="' + escapeHtml(k) + '"' + (catState.on.has(k) ? ' checked' : '') + '>' +
+            escapeHtml((CAT_T.kinds[k] || k) + ' · ' + formatBytes(catState.kinds[k].size)) + '</label>').join('') + replace;
+    }
+    document.getElementById('catReplaceMedia').onchange = e => { catState.replaceMedia = e.target.checked; catSummary(); };
+    document.getElementById('catReplaceDesc').onchange = e => { catState.replaceDesc = e.target.checked; catSummary(); };
     box.querySelectorAll('input[data-kind]').forEach(cb => cb.onchange = () => {
         if (cb.checked) catState.on.add(cb.dataset.kind); else catState.on.delete(cb.dataset.kind);
         try {
@@ -12087,21 +13708,197 @@ function catRenderKinds() {
     });
 }
 
+// ---- filters, sorting, "selected only"
+const CAT_SORTS = ['col', 'name', 'yearAsc', 'yearDesc', 'sizeAsc', 'sizeDesc'];
+let catSort = 'col';
+try { const v = localStorage.getItem('ss_cat_sort'); if (CAT_SORTS.includes(v)) catSort = v; } catch (e) { /* private window */ }
+
+// "Platform / Shooter Scrolling" -> ['Platform', 'Shooter Scrolling']
+function catGenres(g) {
+    let parts = [g.genre || ''];
+    ['/', ',', ';'].forEach(c => { parts = [].concat(...parts.map(x => x.split(c))); });
+    return parts.map(x => x.trim()).filter(Boolean);
+}
+
+// "1-4" -> 4
+function catMaxPlayers(g) {
+    const m = String(g.players || '').match(/[0-9]+/g);
+    return m ? Math.max(...m.map(Number)) : 0;
+}
+
+function catFillFilters() {
+    const st = catState;
+    const opt = (v, text, on) => '<option value="' + escapeHtml(v) + '"' + (on ? ' selected' : '') + '>' + escapeHtml(text) + '</option>';
+    const genres = {};
+    st.games.forEach(g => catGenres(g).forEach(x => { genres[x] = (genres[x] || 0) + 1; }));
+    const names = Object.keys(genres).sort((a, b) => a.localeCompare(b));
+    const gs = document.getElementById('catGenre');
+    gs.innerHTML = opt('', CAT_T.allGenres) + names.map(x => opt(x, x + ' (' + genres[x] + ')')).join('');
+    gs.style.display = names.length ? '' : 'none';
+    const maxes = st.games.map(catMaxPlayers);
+    const pl = [];
+    if (maxes.some(m => m === 1)) pl.push(opt('1', CAT_T.players1));
+    [2, 3, 4].forEach(n => { if (maxes.some(m => m >= n)) pl.push(opt(String(n), linkFmt(CAT_T.playersN, { n: n }))); });
+    const ps = document.getElementById('catPlayers');
+    ps.innerHTML = opt('', CAT_T.anyPlayers) + pl.join('');
+    ps.style.display = pl.length > 1 ? '' : 'none';
+    document.getElementById('catSort').innerHTML = CAT_SORTS.map(k => opt(k, CAT_T.sorts[k], k === catSort)).join('');
+    document.getElementById('catHideText').textContent = CAT_T.hideHave;
+    const fresh = st.games.filter(g => g.isNew || g.isChg).length;
+    document.getElementById('catNewText').textContent = linkFmt(CAT_T.onlyNew, { n: fresh });
+    document.getElementById('catNewRow').style.display = fresh ? '' : 'none';
+    document.getElementById('catOnlyNew').checked = false;
+    document.getElementById('catHideHave').checked = false;
+}
+
+function catSortChanged() {
+    catSort = document.getElementById('catSort').value;
+    try { localStorage.setItem('ss_cat_sort', catSort); } catch (e) { /* private window */ }
+    catRender();
+}
+
+// "Selected": only the ticked games, whatever the search and the filters
+function catToggleSel() {
+    catState.onlySel = !catState.onlySel;
+    catState.limit = CAT_PAGE;
+    catRender();
+}
+
 function catShown() {
-    const q = (document.getElementById('catSearch').value || '').trim().toLowerCase();
+    const st = catState;
     const out = [];
-    catState.games.forEach((g, i) => {
-        if (!q || g.name.toLowerCase().includes(q) || (g.file || '').toLowerCase().includes(q)) out.push(i);
-    });
+    const busy = !!st.onlySel;
+    ['catSearch', 'catGenre', 'catPlayers', 'catHideHave', 'catOnlyNew'].forEach(id => { document.getElementById(id).disabled = busy; });
+    document.getElementById('catHideRow').style.display = st.games.some(g => g.have) ? '' : 'none';
+    if (busy) {
+        st.games.forEach((g, i) => { if (st.sel.has(g.path)) out.push(i); });
+    } else {
+        const q = (document.getElementById('catSearch').value || '').trim().toLowerCase();
+        const genre = document.getElementById('catGenre').value;
+        const pl = document.getElementById('catPlayers').value;
+        const hide = document.getElementById('catHideHave').checked;
+        const onlyNew = document.getElementById('catOnlyNew').checked;
+        st.games.forEach((g, i) => {
+            if (q && !g.name.toLowerCase().includes(q) && !(g.file || '').toLowerCase().includes(q)) return;
+            if (hide && g.have) return;
+            if (onlyNew && !g.isNew && !g.isChg) return;
+            if (genre && !catGenres(g).includes(genre)) return;
+            if (pl) {
+                const m = catMaxPlayers(g);
+                if (pl === '1' ? m !== 1 : m < parseInt(pl)) return;
+            }
+            out.push(i);
+        });
+    }
+    if (catSort !== 'col') {
+        const G = st.games;
+        const cmp = {
+            name: (a, b) => G[a].name.localeCompare(G[b].name, undefined, { numeric: true, sensitivity: 'base' }),
+            yearAsc: (a, b) => (G[a].year || '9999').localeCompare(G[b].year || '9999'),
+            yearDesc: (a, b) => (G[b].year || '0000').localeCompare(G[a].year || '0000'),
+            sizeAsc: (a, b) => (G[a].size || 0) - (G[b].size || 0),
+            sizeDesc: (a, b) => (G[b].size || 0) - (G[a].size || 0)
+        }[catSort];
+        out.sort((a, b) => cmp(a, b) || a - b);
+    }
     return out;
+}
+
+// The pictures of a game on the whole screen: arrows, a swipe or the arrow keys go through
+// them (those of the source chosen in the details); a tap or Esc closes it. The details
+// show the picture last seen.
+function catZoom(i, src) {
+    const st = catState;
+    const g = st.games[i];
+    const all = catShots(g, catSource(g, i));
+    const items = all.filter(x => x.kind !== 'video');
+    if (!items.length) return;
+    let cur = Math.max(0, items.findIndex(x => (x.url || st.pics[x.key]) === src));
+    const box = document.createElement('div');
+    box.className = 'cat-zoom';
+    const img = document.createElement('img');
+    img.alt = '';
+    const cap = document.createElement('div');
+    cap.className = 'cat-zoom-cap';
+    // until a picture is there (or when it does not load) a message is shown in its place,
+    // not an empty frame of the browser
+    const msg = document.createElement('div');
+    msg.className = 'cat-zoom-msg';
+    img.style.display = 'none';
+    img.onload = () => { img.style.display = ''; msg.textContent = ''; };
+    img.onerror = () => { img.style.display = 'none'; msg.textContent = CAT_T.picFailed; };
+    const put = src => {
+        if (img.getAttribute('src') === src && img.complete && img.naturalWidth) { img.style.display = ''; msg.textContent = ''; }
+        else img.src = src;
+    };
+    box.appendChild(img);
+    box.appendChild(msg);
+    box.appendChild(cap);
+    const label = x => CAT_T.shot[x.kind] || CAT_T.kinds[x.kind] || x.kind;
+    const show = async n => {
+        cur = (n + items.length) % items.length;
+        const x = items[cur], at = cur;
+        const pos = items.length > 1 ? ' · ' + (cur + 1) + ' / ' + items.length : '';
+        cap.textContent = label(x) + pos;
+        if (catState === st && st.open === i) catShot(i, all.indexOf(x));    // the details follow
+        img.style.display = 'none';
+        msg.textContent = CAT_T.loadingPic;
+        if (x.url || st.pics[x.key]) { put(x.url || st.pics[x.key]); return; }
+        img.removeAttribute('src');
+        const res = await catFetchPic(x.key);
+        if (at !== cur || !box.isConnected) return;
+        if (res && res.data) put(res.data);
+        else msg.textContent = CAT_T.picFailed;
+    };
+    // the page under it does not scroll while it is open
+    document.documentElement.classList.add('cat-zoom-open');
+    box.addEventListener('wheel', e => e.preventDefault(), { passive: false });
+    box.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+    const close = () => {
+        box.remove();
+        document.removeEventListener('keydown', key);
+        document.documentElement.classList.remove('cat-zoom-open');
+    };
+    const key = e => {
+        if (e.key === 'Escape') close();
+        else if (e.key === 'ArrowLeft' && items.length > 1) show(cur - 1);
+        else if (e.key === 'ArrowRight' && items.length > 1) show(cur + 1);
+    };
+    if (items.length > 1) {
+        box.classList.add('nav');
+        [['cat-zoom-prev', '‹', -1], ['cat-zoom-next', '›', 1]].forEach(([cls, ch, d]) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'cat-zoom-nav ' + cls;
+            b.textContent = ch;
+            b.onclick = e => { e.stopPropagation(); show(cur + d); };
+            box.appendChild(b);
+        });
+        let x0 = null;
+        box.addEventListener('touchstart', e => { x0 = e.touches.length === 1 ? e.touches[0].clientX : null; }, { passive: true });
+        box.addEventListener('touchend', e => {
+            if (x0 === null) return;
+            const dx = e.changedTouches[0].clientX - x0;
+            x0 = null;
+            if (Math.abs(dx) > 50) { e.preventDefault(); show(cur + (dx < 0 ? 1 : -1)); }
+        });
+    }
+    box.onclick = close;
+    document.addEventListener('keydown', key);
+    document.body.appendChild(box);
+    show(cur);
 }
 
 function catRender() {
     if (!catState) return;
     const shown = catShown();
-    document.getElementById('catTitle').textContent = linkFmt(CAT_T.title, { name: catState.title, n: catState.games.length });
+    // the name of the collection and, small, the number of games (it does not break the name)
+    document.getElementById('catTitle').innerHTML = '<span class="cat-name">' + escapeHtml(catState.title) + '</span> <span class="cat-count">' + escapeHtml(linkFmt(CAT_T.count, { n: catState.games.length })) + '</span>';
     const list = document.getElementById('catList');
-    const parts = [];
+    const view = catView;
+    list.className = 'link-list cat-list' + (view === 'list' ? '' : ' cat-' + view);
+    document.querySelectorAll('#catViews button').forEach(b => b.classList.toggle('on', b.dataset.view === view));
+    const parts = [], rows = [];
     const allOn = shown.length > 0 && shown.every(i => catState.sel.has(catState.games[i].path));
     parts.push('<label class="link-row"><input type="checkbox" id="catAll"' + (allOn ? ' checked' : '') + '><span class="link-name" style="color:var(--text-secondary)">' +
                escapeHtml(linkFmt(CAT_T.selectShown, { n: shown.length })) + '</span></label>');
@@ -12109,11 +13906,32 @@ function catRender() {
     shown.slice(0, catState.limit).forEach(i => {
         const g = catState.games[i];
         const meta = [g.year, formatBytes(g.size)].filter(Boolean).join(' · ');
-        parts.push('<div class="link-row"><input type="checkbox" data-gi="' + i + '"' + (catState.sel.has(g.path) ? ' checked' : '') + '>' +
-            '<span class="link-name dir" data-go="' + i + '" title="' + escapeHtml(g.file || g.name) + '">' + escapeHtml(g.name) + '</span>' +
-            '<span class="link-meta">' + (g.have ? '<span class="cat-have">' + escapeHtml(CAT_T.have) + '</span> · ' : '') + escapeHtml(meta) + '</span></div>');
-        if (catState.open === i) parts.push(catDetailHtml(g, i));
+        const mark = g.isNew ? '<span class="cat-mark">' + escapeHtml(CAT_T.markNew) + '</span> ' :
+                     g.isChg ? '<span class="cat-mark chg">' + escapeHtml(CAT_T.markChanged) + '</span> ' : '';
+        const box = '<input type="checkbox" data-gi="' + i + '"' + (catState.sel.has(g.path) ? ' checked' : '') + '>';
+        if (view === 'grid') {
+            rows.push('<div class="cat-tile cat-go' + (catState.open === i ? ' open' : '') + '" data-go="' + i + '">' + catCoverHtml(g, i) + box +
+                (g.have ? '<span class="cat-tile-have" title="' + escapeHtml(CAT_T.have) + '">✓</span>' : '') +
+                '<div class="cat-tile-name" title="' + escapeHtml(g.file || g.name) + '">' + escapeHtml(g.name) + '</div>' +
+                '<div class="cat-tile-meta">' + mark + escapeHtml(meta) + '</div></div>');
+        } else {
+            const text = '<span class="link-name dir" title="' + escapeHtml(g.file || g.name) + '">' + escapeHtml(g.name) + '</span>' +
+                '<span class="link-meta">' + mark + (g.have ? '<span class="cat-have">' + escapeHtml(CAT_T.have) + '</span> · ' : '') + escapeHtml(meta) + '</span>';
+            if (view === 'covers') {
+                const d = catRowData(g);
+                const info = [d.year, formatBytes(g.size), d.genre, d.players ? CAT_T.players + ': ' + d.players : ''].filter(Boolean).join(' · ');
+                rows.push('<div class="link-row cat-go' + (catState.open === i ? ' cat-open' : '') + '" data-go="' + i + '">' + box + catCoverHtml(g, i) + '<div class="cat-rt">' +
+                    '<span class="link-name dir" title="' + escapeHtml(g.file || g.name) + '">' + escapeHtml(g.name) + '</span>' +
+                    '<div class="cat-rt-meta">' + mark + (g.have ? '<span class="cat-have">' + escapeHtml(CAT_T.have) + '</span> · ' : '') + escapeHtml(info) + '</div>' +
+                    (d.desc ? '<div class="cat-rt-desc">' + escapeHtml(d.desc) + '</div>' : '') + '</div></div>');
+            } else {
+                rows.push('<div class="link-row cat-go' + (catState.open === i ? ' cat-open' : '') + '" data-go="' + i + '">' + box + text + '</div>');
+            }
+        }
+        // in the lists the line under a game goes under its details
+        if (catState.open === i) rows.push(view === 'grid' ? catDetailHtml(g, i) : '<div class="cat-detail-wrap">' + catDetailHtml(g, i) + '</div>');
     });
+    parts.push(view === 'grid' ? '<div class="cat-tiles">' + rows.join('') + '</div>' : rows.join(''));
     if (shown.length > catState.limit) {
         parts.push('<div class="cat-more"><button class="btn" id="catMore">' + escapeHtml(linkFmt(CAT_T.more, { n: shown.length - catState.limit })) + '</button></div>');
     }
@@ -12130,7 +13948,8 @@ function catRender() {
         if (a) a.checked = shown.length > 0 && shown.every(i => catState.sel.has(catState.games[i].path));
         catSummary();
     });
-    list.querySelectorAll('[data-go]').forEach(el => el.onclick = () => {
+    list.querySelectorAll('[data-go]').forEach(el => el.onclick = e => {
+        if (e.target.closest('input')) return;             // the checkbox only ticks the game
         const i = parseInt(el.dataset.go);
         catState.open = catState.open === i ? null : i;
         catRender();
@@ -12138,7 +13957,169 @@ function catRender() {
     });
     const more = document.getElementById('catMore');
     if (more) more.onclick = () => { catState.limit += CAT_PAGE; catRender(); };
+    catObserve(list);
     catSummary();
+}
+
+// ---- views: List / With covers / Tiles. A cover is asked only when it scrolls into view
+// (a coloured placeholder until then); at most two at a time, like the pictures of the details.
+let catView = 'list';
+try { const v = localStorage.getItem('ss_cat_view'); if (['list', 'covers', 'grid'].includes(v)) catView = v; } catch (e) { /* private window */ }
+
+function catSetView(v) {
+    catView = v;
+    try { localStorage.setItem('ss_cat_view', v); } catch (e) { /* private window */ }
+    catRender();
+}
+
+function catTint(name) {
+    let h = 2166136261;
+    for (let k = 0; k < name.length; k++) h = Math.imul(h ^ name.charCodeAt(k), 16777619);
+    h = Math.imul(h ^ (h >>> 15), 2246822507);
+    h = ((h ^ (h >>> 13)) >>> 0) % 360;
+    return 'linear-gradient(160deg,hsl(' + h + ',42%,62%),hsl(' + h + ',30%,34%))';
+}
+
+function catCoverHtml(g, i) {
+    const url = catState.cover[i];
+    return '<div class="cat-cov" id="catCov' + i + '" data-ci="' + i + '"' +
+        (url ? '>' + '<img src="' + url + '" alt="">' : ' style="background:' + catTint(g.name) + '">') + '</div>';
+}
+
+let catCoverObs = null;
+function catObserve(list) {
+    if (catCoverObs) { catCoverObs.disconnect(); catCoverObs = null; }
+    const st = catState;
+    st.coverVis = new Set();
+    if (catView === 'list') return;
+    const els = [];
+    list.querySelectorAll('.cat-cov[data-ci]').forEach(el => { if (st.cover[el.dataset.ci] === undefined) els.push(el); });
+    if (!els.length) return;
+    if (!('IntersectionObserver' in window)) {
+        els.forEach(el => st.coverVis.add(parseInt(el.dataset.ci)));
+        catCoverPump();
+        return;
+    }
+    catCoverObs = new IntersectionObserver(entries => {
+        entries.forEach(en => {
+            const i = parseInt(en.target.dataset.ci);
+            if (en.isIntersecting) st.coverVis.add(i); else st.coverVis.delete(i);
+        });
+        catCoverPump();
+    }, { root: list, rootMargin: '200px 0px' });
+    els.forEach(el => catCoverObs.observe(el));
+}
+
+// with the size in the link the browser keeps a picture for a month (a changed one gets another link)
+function catCoverUrl(st, pic) {
+    return API + '/link/catalog_cover?sid=' + encodeURIComponent(st.sid) + '&dir=' + encodeURIComponent(st.dir) + '&path=' + encodeURIComponent(pic) + '&s=' + (st.sizes[pic] || 0);
+}
+
+function catPicUrl(st, pic) {
+    return API + '/link/catalog_pic?sid=' + encodeURIComponent(st.sid) + '&dir=' + encodeURIComponent(st.dir) + '&path=' + encodeURIComponent(pic) + '&s=' + (st.sizes[pic] || 0);
+}
+
+function catImgLoad(url) {
+    return new Promise(done => {
+        const im = new Image();
+        im.onload = () => done(true);
+        im.onerror = () => done(false);
+        im.src = url;
+    });
+}
+
+// a catalog left alone for 10 minutes is closed on the device: opened again for a picture
+let catRevivePromise = null;
+function catRevive() {
+    if (!catRevivePromise) {
+        catRevivePromise = apiFetch('/link/catalog_touch', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: linkState.url, password: linkState.password })
+        });
+        catRevivePromise.then(() => setTimeout(() => { catRevivePromise = null; }, 5000));
+    }
+    return catRevivePromise;
+}
+
+// covers of the games already on the device: one request for the whole list (null while it runs)
+function catDevCovers(st, dir) {
+    if (!dir) return {};
+    const c = st.devCovers[dir];
+    if (c) return c.map || null;
+    const paths = st.games.filter(g => g.have).map(g => g.path);
+    if (!paths.length) return {};
+    st.devCovers[dir] = {};
+    apiFetch('/link/catalog_device_covers', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir: dir, paths: paths })
+    }).then(res => {
+        const map = {}, m = (res && res.covers) || {};
+        Object.keys(m).forEach(p => { map[p] = catLocalUrl(dir, m[p]); });
+        st.devCovers[dir].map = map;
+        st.devCovers[dir].info = (res && res.info) || {};
+        if (catState !== st) return;
+        // the rows of the games on the device now show the device's data
+        if (catView === 'covers' && Object.keys(st.devCovers[dir].info).length) catRender(); else catCoverPump();
+    });
+    return null;
+}
+
+// the data of a row: a game on the device shows its entry in the device's gamelist.xml
+// (missing fields come from the collection)
+function catRowData(g) {
+    if (!g.have) return g;
+    const c = catState.devCovers[catLocalDir()];
+    const dev = c && c.info && c.info[g.path];
+    if (!dev) return g;
+    const d = Object.assign({}, g);
+    Object.keys(dev).forEach(k => { d[k] = dev[k]; });
+    return d;
+}
+
+function catCoverPump() {
+    const st = catState;
+    if (!st || catView === 'list') return;
+    let dev;
+    for (const i of Array.from(st.coverVis)) {
+        if (st.cover[i] !== undefined) continue;
+        const g = st.games[i];
+        if (g.have) {
+            if (dev === undefined) dev = catDevCovers(st, catLocalDir());
+            if (dev === null) continue;                    // asked; the pump runs again with the answer
+            if (dev[g.path]) { catCoverLoad(st, i, dev[g.path], true); continue; }
+        }
+        if (catPicActive >= CAT_PIC_PARALLEL) continue;
+        const pic = catPicPath(g);
+        if (!pic) { st.cover[i] = null; continue; }
+        catCoverLoad(st, i, catCoverUrl(st, pic), false);
+    }
+}
+
+function catCoverLoad(st, i, url, local) {
+    st.cover[i] = '';                                      // loading
+    if (!local) catPicActive++;                            // a file on the device takes no slot
+    const img = new Image();
+    const done = ok => {
+        if (!local) catPicFree();
+        // the catalog may have been closed on the device: opened again, the cover asked once more
+        if (!ok && !local && catState === st && !st.coverRetry[i]) {
+            st.coverRetry[i] = true;
+            st.cover[i] = undefined;
+            catRevive().then(() => catCoverPump());
+            return;
+        }
+        if (catState === st) {
+            st.cover[i] = ok ? url : null;                 // a failed one keeps its placeholder
+            st.coverVis.delete(i);
+            const el = document.getElementById('catCov' + i);
+            if (el && ok) { el.style.background = ''; el.innerHTML = '<img src="' + url + '" alt="">'; }
+            if (el && catCoverObs) catCoverObs.unobserve(el);
+        }
+        catCoverPump();
+    };
+    img.onload = () => done(true);
+    img.onerror = () => done(false);
+    img.src = url;
 }
 
 function catPicPath(g) {
@@ -12149,50 +14130,256 @@ function catPicPath(g) {
     return null;
 }
 
-function catDetailHtml(g, i) {
-    const info = [];
-    ['genre', 'players', 'developer', 'publisher', 'lang', 'region'].forEach(k => {
-        if (g[k]) info.push('<div>' + escapeHtml(CAT_T[k] + ': ' + g[k]) + '</div>');
-    });
-    info.push('<div>' + escapeHtml(CAT_T.file + ': ' + (g.file || g.path)) + '</div>');
-    const pic = catPicPath(g);
-    const picHtml = !pic ? escapeHtml(CAT_T.noPic)
-        : catState.pics[pic] ? '<img src="' + catState.pics[pic] + '" alt="">' : escapeHtml(CAT_T.loadingPic);
-    return '<div class="cat-detail"><div class="cat-pic" id="catPic' + i + '">' + picHtml + '</div><div class="cat-info">' +
-        info.join('') + (g.desc ? '<div class="cat-desc">' + escapeHtml(g.desc) + '</div>' : '') + '</div></div>';
+// The details of a game show its pictures (buttons under the picture) and its video. For a game
+// already on the device they come from its entry in the device's gamelist.xml ("From the
+// device"); "From the collection" shows those of the link.
+function catLocalDir() {
+    const sel = document.getElementById('linkDest');
+    return (linkState.target !== 'cloud' && sel && sel.value) || catState.system || '';
 }
 
-function catFetchPic(pic) {
+function catLocalUrl(dir, rel) {
+    return API + '/link/catalog_local?dir=' + encodeURIComponent(dir) + '&path=' + encodeURIComponent(rel);
+}
+
+// {tag: url} of the game on the device (cached; {} when it has none)
+function catDevice(g) {
     const st = catState;
-    if (!st.pending[pic]) {
-        st.pending[pic] = apiFetch('/link/catalog_media', {
+    const dir = catLocalDir();
+    if (!g || !g.have || !dir) return Promise.resolve({});
+    const key = dir + '|' + g.path;
+    if (!st.local[key]) {
+        st.local[key] = apiFetch('/link/catalog_device_media', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: linkState.url, password: linkState.password, dir: st.dir, path: pic })
+            body: JSON.stringify({ dir: dir, path: g.path })
         }).then(res => {
-            if (res && res.data) st.pics[pic] = res.data;
-            else delete st.pending[pic];      // a failed picture can be tried again
-            return res;
+            const out = {};
+            const m = (res && res.media) || {};
+            Object.keys(m).forEach(t => { out[t] = catLocalUrl(dir, m[t]); });
+            // the game's entry on the device: its description (null when it has no entry)
+            st.devInfo[key] = (res && res.info) || null;
+            st.devReady[key] = out;
+            return out;
         });
     }
-    return st.pending[pic];
+    return st.local[key];
+}
+
+function catDevReady(g) {
+    return catState.devReady[catLocalDir() + '|' + g.path];
+}
+
+function catDevInfo(g) {
+    return catState.devInfo[catLocalDir() + '|' + g.path] || null;
+}
+
+// the device has an entry for the game (pictures, video or a description)
+function catDevHas(g) {
+    const dev = catDevReady(g);
+    return !!dev && (Object.keys(dev).length > 0 || !!catDevInfo(g));
+}
+
+// 'device' or 'link': what the device has is shown first
+function catSource(g, i) {
+    if (!catDevHas(g)) return 'link';
+    return catState.source[i] || 'device';
+}
+
+const CAT_IS_PIC = p => /[.](png|jpe?g|gif|webp|bmp)$/i.test(p);
+const CAT_IS_VIDEO = p => /[.](mp4|m4v|webm)$/i.test(p);
+
+// buttons of a game: {kind, key, url?, size?}. key: what is shown (a link path or a device url)
+function catShots(g, src) {
+    const out = [], kinds = new Set();
+    const group = k => (k === 'boxart' ? 'thumbnail' : k);
+    if (src === 'device') {
+        const dev = catDevReady(g) || {};
+        const first = CAT_PIC_ORDER.find(k => dev[k] && CAT_IS_PIC(dev[k].split('path=')[1] || dev[k]));
+        if (first) { out.push({ kind: first, key: dev[first], url: dev[first] }); kinds.add(group(first)); }
+        CAT_GALLERY.forEach(k => {
+            if (dev[k] && !kinds.has(group(k)) && !out.some(s => s.key === dev[k])) {
+                out.push({ kind: k, key: dev[k], url: dev[k] }); kinds.add(group(k));
+            }
+        });
+        if (dev.video) out.push({ kind: 'video', key: dev.video, url: dev.video, size: 0 });
+        if (!out.some(x => x.kind !== 'video')) {              // no pictures on the device: the collection's
+            catShots(g, 'link').forEach(x => { if (x.kind !== 'video' || !dev.video) out.push(x); });
+        }
+        return out;
+    }
+    const seen = new Set();
+    const main = catPicPath(g);
+    if (main) { const k = catKindOf(g, main); out.push({ kind: k, key: main }); seen.add(main); kinds.add(group(k)); }
+    const look = g.look || g.media;
+    CAT_GALLERY.forEach(k => {
+        const m = look[k];
+        if (m && !seen.has(m[0]) && !kinds.has(group(k)) && CAT_IS_PIC(m[0])) {
+            out.push({ kind: k, key: m[0] }); seen.add(m[0]); kinds.add(group(k));
+        }
+    });
+    const v = look.video;
+    if (v && CAT_IS_VIDEO(v[0])) out.push({ kind: 'video', key: v[0], size: v[1] || 0 });
+    return out;
+}
+
+function catKindOf(g, path) {
+    return Object.keys(g.media).find(k => g.media[k][0] === path) || '';
+}
+
+function catShotsHtml(g, i) {
+    const src = catSource(g, i);
+    const shots = catShots(g, src);
+    const both = catDevHas(g);
+    let html = '';
+    if (both) {
+        html += '<div class="cat-src">' +
+            '<button type="button" class="' + (src === 'device' ? 'on' : '') + '" onclick="catSetSource(' + i + ',' + "'device'" + ')">' + escapeHtml(CAT_T.fromDevice) + '</button>' +
+            '<button type="button" class="' + (src === 'link' ? 'on' : '') + '" onclick="catSetSource(' + i + ',' + "'link'" + ')">' + escapeHtml(CAT_T.fromLink) + '</button></div>';
+    }
+    if (shots.length < 2) return html;
+    const cur = catState.view[i] || (shots[0] && shots[0].key);
+    return html + '<div class="cat-shots">' + shots.map((s, n) => {
+        const label = s.kind === 'video'
+            ? (s.size ? linkFmt(CAT_T.video, { size: formatBytes(s.size) }) : '▶ ' + (CAT_T.kinds.video || 'Video'))
+            : (CAT_T.shot[s.kind] || CAT_T.kinds[s.kind] || s.kind);
+        return '<button type="button" class="' + (s.key === cur ? 'on' : '') + '" onclick="catShot(' + i + ',' + n + ')">' + escapeHtml(label) + '</button>';
+    }).join('') + '</div>';
+}
+
+function catSetSource(i, src) {
+    catState.source[i] = src;
+    delete catState.view[i];
+    catRender();
+    catLoadPic(i);
+}
+
+function catVideoHtml(url) {
+    return '<video src="' + url + '" controls autoplay playsinline preload="auto"></video>';
+}
+
+async function catShot(i, n) {
+    const st = catState;
+    const g = st.games[i];
+    const src = catSource(g, i);
+    const s = catShots(g, src)[n];
+    if (!s) return;
+    st.view[i] = s.key;
+    const detail = document.getElementById('catPic' + i);
+    if (!detail) return;
+    const box = detail.querySelector('.cat-pic-main');
+    detail.querySelectorAll('.cat-shots button').forEach((b, j) => b.classList.toggle('on', j === n));
+    if (s.url) {                                           // on the device: shown at once
+        box.innerHTML = s.kind === 'video' ? catVideoHtml(s.url) : '<img src="' + s.url + '" alt="">';
+        return;
+    }
+    if (s.kind === 'video') {
+        box.textContent = CAT_T.loadingVideo;
+        const res = await apiFetch('/link/catalog_video', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: linkState.url, password: linkState.password, dir: st.dir, path: s.key })
+        });
+        if (catState !== st || st.view[i] !== s.key) return;
+        if (res && res.src) box.innerHTML = catVideoHtml(API + res.src.replace(/^[/]api/, ''));
+        else box.textContent = (res && res.error) || CAT_T.noVideo;
+        return;
+    }
+    if (st.pics[s.key]) { box.innerHTML = '<img src="' + st.pics[s.key] + '" alt="">'; return; }
+    box.textContent = CAT_T.loadingPic;
+    const res = await catFetchPic(s.key);
+    if (catState !== st || st.view[i] !== s.key) return;
+    if (res && res.data) box.innerHTML = '<img src="' + res.data + '" alt="">';
+    else box.textContent = CAT_T.picFailed;
+}
+
+function catDetailHtml(g, i) {
+    const info = [];
+    // the description of the chosen source: the device's entry or the collection's
+    const waiting = g.have && catDevReady(g) === undefined;
+    const d = !waiting && catSource(g, i) === 'device' ? (catDevInfo(g) || {}) : g;
+    ['genre', 'players', 'developer', 'publisher', 'lang', 'region'].forEach(k => {
+        if (d[k]) info.push('<div>' + escapeHtml(CAT_T[k] + ': ' + d[k]) + '</div>');
+    });
+    info.push('<div>' + escapeHtml(CAT_T.file + ': ' + (g.file || g.path)) + '</div>');
+    let picHtml;
+    if (g.have && catDevReady(g) === undefined) {
+        picHtml = escapeHtml(CAT_T.loadingPic);                 // the device is asked first
+    } else {
+        const src = catSource(g, i);
+        const shots = catShots(g, src);
+        // the picture chosen with the buttons stays when the details are opened again (a video starts over)
+        let s = shots.find(x => x.key === catState.view[i] && x.kind !== 'video') || shots.find(x => x.kind !== 'video');
+        if (!s) picHtml = escapeHtml(CAT_T.noPic);
+        else if (s.url) picHtml = '<img src="' + s.url + '" alt="">';
+        else picHtml = catState.pics[s.key] ? '<img src="' + catState.pics[s.key] + '" alt="">' : escapeHtml(CAT_T.loadingPic);
+        if (catState.view[i] && (!s || s.key !== catState.view[i])) delete catState.view[i];
+    }
+    return '<div class="cat-detail"><div class="cat-pic" id="catPic' + i + '"><div class="cat-pic-main">' + picHtml + '</div>' +
+        (g.have && catDevReady(g) === undefined ? '' : catShotsHtml(g, i)) + '</div><div class="cat-info">' +
+        info.join('') + (d.desc ? '<div class="cat-desc">' + escapeHtml(d.desc) + '</div>' : '') + '</div></div>';
+}
+
+// At most two pictures of the catalog are asked at a time: a picture the service does not
+// give must not take up the browser's connections to the device (status, logs, buttons).
+const CAT_PIC_PARALLEL = 2;
+let catPicActive = 0;
+const catPicQueue = [];
+function catPicSlot() {
+    if (catPicActive < CAT_PIC_PARALLEL) { catPicActive++; return Promise.resolve(); }
+    return new Promise(r => catPicQueue.push(r));
+}
+function catPicFree() {
+    const next = catPicQueue.shift();
+    if (next) next(); else catPicActive--;
+}
+
+function catFetchPic(pic, prefetch) {
+    const st = catState;
+    if (st.pending[pic]) return st.pending[pic];
+    // the next games are loaded ahead only into a free slot, and not after a failure
+    if (prefetch && (catPicActive >= CAT_PIC_PARALLEL || st.failed[pic])) return null;
+    const url = catPicUrl(st, pic);
+    const p = catPicSlot().then(() => catImgLoad(url))
+        .then(ok => ok ? true : catRevive().then(() => catImgLoad(url)))
+        .then(ok => {
+            catPicFree();
+            if (ok) { st.pics[pic] = url; delete st.failed[pic]; return { data: url }; }
+            delete st.pending[pic]; st.failed[pic] = true;                 // tried again when opened again
+            return { error: 'failed' };
+        });
+    st.pending[pic] = p;
+    return p;
 }
 
 async function catLoadPic(i) {
     const st = catState;
     const g = st.games[i];
-    const pic = catPicPath(g);
-    // the next games of the list are loaded meanwhile: opening them is instant
+    if (g.have && catDevReady(g) === undefined) {
+        await catDevice(g);                                // quick: a file on the device
+        if (catState !== st) return;
+        if (st.open === i) catRender();
+    }
+    const src = catSource(g, i);
+    const first = catShots(g, src).find(x => x.kind !== 'video');
+    const pic = first && !first.url && !st.view[i] ? first.key : null;
+    // the picture of the opened game is asked first, so it never waits behind the others
+    const own = pic && !st.pics[pic] ? catFetchPic(pic) : null;
+    // the next games of the list are loaded meanwhile (not those on the device: shown from it)
     const shown = catShown();
     const at = shown.indexOf(i);
-    shown.slice(at + 1, at + 4).forEach(j => { const p = catPicPath(st.games[j]); if (p && !st.pics[p]) catFetchPic(p); });
-    if (!pic || st.pics[pic]) return;
-    const res = await catFetchPic(pic);
-    if (catState !== st) return;
-    const box = document.getElementById('catPic' + i);
+    shown.slice(at + 1, at + 4).forEach(j => {
+        const gj = st.games[j];
+        const p = catPicPath(gj);
+        if (p && !gj.have && !st.pics[p]) catFetchPic(p, true);
+    });
+    if (!own) return;
+    const res = await own;
+    if (catState !== st || st.view[i] || catSource(g, i) !== src) return;
+    const detail = document.getElementById('catPic' + i);
+    const box = detail && detail.querySelector('.cat-pic-main');
     if (res && res.data) {
         if (box) box.innerHTML = '<img src="' + res.data + '" alt="">';
     } else if (box) {
-        box.textContent = CAT_T.noPic;
+        box.textContent = CAT_T.picFailed;
     }
 }
 
@@ -12209,6 +14396,13 @@ function catTotals() {
 
 function catSummary() {
     if (!catState) return;
+    document.getElementById('linkStartBtn').classList.toggle('cat-wait', !!catState.cached);
+    const ob = document.getElementById('catOnlySel');
+    if (ob) {
+        ob.textContent = linkFmt(CAT_T.onlySel, { n: catState.sel.size });
+        ob.classList.toggle('on', !!catState.onlySel);
+        ob.disabled = !catState.onlySel && !catState.sel.size;
+    }
     linkGuessDest();
     const t = catTotals();
     const lines = [];
@@ -12221,6 +14415,13 @@ function catSummary() {
         lines.push({ text: !dest ? CAT_T.destNone : cloud ? linkFmt(CAT_T.destCloud, { dest: linkFmt(LINK_T.cloudLabel, { sys: dest }) })
                                                        : linkFmt(CAT_T.dest, { dest: dest }), warn: !dest });
         if (Object.keys(catState.kinds).length && !catState.on.size) lines.push({ text: CAT_T.noMedia });
+        // games already on the device: what happens to their own media and description
+        if (catState.games.some(g => g.have && catState.sel.has(g.path))) {
+            const what = [];
+            if (catState.replaceMedia) what.push(CAT_T.whatMedia);
+            if (catState.replaceDesc) what.push(CAT_T.whatDesc);
+            lines.push({ text: what.length ? linkFmt(CAT_T.replaceNote, { what: what.join(', ') }) : CAT_T.keepNote });
+        }
         if (cloud && catState.on.size && catState.syncMedia === 'false') lines.push({ text: CAT_T.cloudMedia });
         else if (cloud && catState.on.has('video') && catState.syncMedia !== 'video') lines.push({ text: CAT_T.cloudVideo });
         const d = linkState.dests[linkState.target] || {};
@@ -12236,6 +14437,7 @@ function catSummary() {
 }
 
 function catDownload() {
+    if (catState.cached) { showToast(CAT_T.waitCheck, 'error'); return; }
     const dest = document.getElementById('linkDest').value;
     if (!dest) { showToast(CAT_T.destNone, 'error'); return; }
     const games = catState.games.filter(g => catState.sel.has(g.path)).map(g => g.path);
@@ -12246,7 +14448,8 @@ function catDownload() {
         return await apiFetch('/link/catalog_get', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: linkState.url, password: linkState.password, dir: catState.dir,
-                                   dest: dest, games: games, media: media, target: linkState.target })
+                                   dest: dest, games: games, media: media, target: linkState.target,
+                                   replace_media: catState.replaceMedia, replace_desc: catState.replaceDesc })
         });
     });
     setTimeout(() => { if (bar) bar.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 100);
@@ -12285,7 +14488,126 @@ function opCancelled(target) {
     }, 2500);
 }
 
+// ---- sections of the web interface (Settings -> Sections)
+let SECTIONS = { roms: true, link: true };
+
+function applySections() {
+    document.getElementById('romsSection').style.display = SECTIONS.roms ? '' : 'none';
+    document.getElementById('linkSection').style.display = SECTIONS.link ? '' : 'none';
+    // without the ROMs the link section is the first one: no gap above it
+    document.querySelector('#linkSection > .section-title').style.marginTop = SECTIONS.roms ? '20px' : '0';
+    document.getElementById('secRoms').checked = SECTIONS.roms;
+    document.getElementById('secLink').checked = SECTIONS.link;
+    // both hidden: the tab itself goes away
+    const tab = document.querySelector('.tab[data-tab="roms"]');
+    const none = !SECTIONS.roms && !SECTIONS.link;
+    tab.style.display = none ? 'none' : '';
+    if (none && tab.classList.contains('active')) document.querySelector('.tab[data-tab="saves"]').click();
+}
+
+async function loadSections() {
+    const res = await apiFetch('/sections');
+    if (res && typeof res.roms === 'boolean' && typeof res.link === 'boolean') {
+        SECTIONS = { roms: res.roms, link: res.link };
+    }
+    applySections();
+}
+
+// the "IMPORTANT" notes: folded to one line (what deletes), a tap on the title opens them
+['noteSaves', 'noteRoms'].forEach(id => {
+    const note = document.getElementById(id);
+    note.querySelector('p').addEventListener('click', () => note.classList.toggle('folded'));
+});
+
+async function saveSections() {
+    SECTIONS.roms = document.getElementById('secRoms').checked;
+    SECTIONS.link = document.getElementById('secLink').checked;
+    applySections();
+    postSections();
+}
+
+async function postSections() {
+    const res = await apiFetch('/sections', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(SECTIONS)
+    });
+    if (!res || res.error) showToast((res && res.error) || 'Error', 'error');
+}
+
+// ---- export / import of the settings
+const CFG_T = {"title": "Перенос настроек", "export": "Экспорт", "import": "Импорт", "hint": "Экспорт скачивает файл настроек этого устройства (sync.conf), импорт берёт из такого файла только то, что вы отметите. Подключения к облаку в нём нет.", "choose": "Что взять из «{name}»:", "apply": "Импорт", "cancel": "Отмена", "groups": {"links": "Сохранённые ссылки ({n}): добавятся к уже сохранённым", "sync": "Синхронизация: интервал, попытки, копии при конфликтах, уведомления, после игры", "excluded": "Исключения", "roms": "Системы ромов и медиа", "web": "Разделы веб-интерфейса"}, "notFile": "Это не файл настроек Save Sync", "done": "Импортировано: настроек {s}, новых ссылок {l}", "nothing": "Отметьте, что импортировать"};
+const CFG_GROUPS = { links: ['WEB_LINKS'], sync: ['SYNC_INTERVAL', 'MAX_RETRIES', 'CONFLICT_KEEP_DAYS', 'NOTIFICATIONS', 'SYNC_MODE', 'MIN_FREE_KB'],
+                     excluded: ['EXCLUDED_SYSTEMS'], roms: ['ROMS_SYNC_DIRS', 'ROMS_SYNC_MEDIA'], web: ['WEB_SHOW_ROMS', 'WEB_SHOW_LINK'] };
+// device dependent groups are not ticked at first
+const CFG_ON = ['links', 'sync'];
+let cfgText = '';
+
+function cfgExport() {
+    const a = document.createElement('a');
+    a.href = API + '/config/export';
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+}
+
+function cfgPick(input) {
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => cfgShow(String(reader.result || ''), file.name);
+    reader.readAsText(file);
+}
+
+function cfgShow(text, name) {
+    const keys = {};
+    text.split(String.fromCharCode(10)).forEach(line => {
+        const m = line.match(/^ *([A-Z_]+) *= *"?(.*?)"? *$/);
+        if (m && !line.trim().startsWith('#')) keys[m[1]] = m[2];
+    });
+    const box = document.getElementById('cfgImport');
+    if (!Object.keys(keys).some(k => CFG_GROUPS.sync.includes(k) || k === 'WEB_LINKS')) {
+        box.style.display = 'none';
+        showToast(CFG_T.notFile, 'error');
+        return;
+    }
+    cfgText = text;
+    const links = (keys.WEB_LINKS || '').split(' ').filter(Boolean).length;
+    box.innerHTML = '<div>' + escapeHtml(CFG_T.choose.replace('{name}', name)) + '</div>' + Object.keys(CFG_GROUPS).map(g => {
+        const has = g === 'links' ? links > 0 : CFG_GROUPS[g].some(k => k in keys);
+        const label = CFG_T.groups[g].replace('{n}', links);
+        return '<label class="' + (has ? '' : 'off') + '"><input type="checkbox" data-cfg="' + g + '"' +
+            (has && CFG_ON.includes(g) ? ' checked' : '') + (has ? '' : ' disabled') + '><span>' + escapeHtml(label) + '</span></label>';
+    }).join('') + '<div class="cfg-actions"><button class="btn btn-primary" onclick="cfgApply()">' + escapeHtml(CFG_T.apply) + '</button>' +
+        '<button class="btn" onclick="cfgCancel()">' + escapeHtml(CFG_T.cancel) + '</button></div>';
+    box.style.display = '';
+}
+
+function cfgCancel() {
+    cfgText = '';
+    document.getElementById('cfgImport').style.display = 'none';
+}
+
+async function cfgApply() {
+    const groups = Array.from(document.querySelectorAll('#cfgImport input[data-cfg]:checked')).map(x => x.dataset.cfg);
+    if (!groups.length) { showToast(CFG_T.nothing, 'error'); return; }
+    const res = await apiFetch('/config/import', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: cfgText, groups: groups })
+    });
+    if (!res || !res.success) { showToast((res && res.error) || 'Error', 'error'); return; }
+    showToast(CFG_T.done.replace('{s}', res.settings).replace('{l}', res.links));
+    cfgCancel();
+    loadSettings();
+    loadSections();
+    linkSavedLoad();
+    if (typeof loadSystems === 'function') loadSystems();
+}
+
+loadSections();
 linkInit();
+linkSavedLoad();
 setInterval(refreshStatus, 10000);
 setInterval(refreshStats, 10000);
 </script>
@@ -12323,7 +14645,7 @@ if __name__ == "__main__":
     except:
         ip_addr = 'localhost'
     
-    print(f"\n✅ Save Sync Web UI v1.4.8 запущен")
+    print(f"\n✅ Save Sync Web UI v1.5.0 запущен")
     print(f"🌐 Откройте: http://{ip_addr}:{port}")
     print(f"⏹️  Ctrl+C для остановки\n")
     
@@ -12337,7 +14659,7 @@ EOF
     # Подставляем реальные пути текущей системы вместо плейсхолдеров.
     # Без этого веб-интерфейс работал бы только на Batocera/KNULLI.
     sed -i \
-        -e "s|__SS_BASE__|$BASE|g" \
+        -e "s|__SS_BASE__|$DATA_DIR|g" \
         -e "s|__SS_CONFIG_FILE__|$CONFIG_FILE|g" \
         -e "s|__SS_LOG_FILE__|$LOG_FILE|g" \
         -e "s|__SS_SAVE_DIR__|$SAVE_DIR|g" \
@@ -12388,7 +14710,7 @@ if [ "$1" = "--info" ]; then
     
     echo ""
     echo "══════════════════════════════════════════════════════════"
-    echo " Save Sync Diagnostics v1.4.8"
+    echo " Save Sync Diagnostics v1.5.0"
     echo " Система: $SYSTEM"
     echo "══════════════════════════════════════════════════════════"
     echo ""
@@ -12587,13 +14909,13 @@ fi
 # Автозагрузка сохранений
 AUTOLOAD_FOUND=false
 if [ -f "$BASE/custom.sh" ]; then
-    if grep -q "download_sync.sh" "$BASE/custom.sh" 2>/dev/null; then
+    if grep -qF "$DOWNLOAD_SCRIPT" "$BASE/custom.sh" 2>/dev/null; then
         print_2col "Автозагрузка" "✅ настроен (custom.sh)"
         AUTOLOAD_FOUND=true
     fi
 fi
 if [ -f "$BASE/services/custom_service" ]; then
-    if grep -q "download_sync.sh" "$BASE/services/custom_service" 2>/dev/null; then
+    if grep -qF "$DOWNLOAD_SCRIPT" "$BASE/services/custom_service" 2>/dev/null; then
         if [ "$AUTOLOAD_FOUND" = false ]; then
             print_2col "Автозагрузка" "✅ настроен (custom_service)"
             AUTOLOAD_FOUND=true
@@ -12713,9 +15035,185 @@ fi
 # Режим центра управления
 ############################################
 
+############################################
+# Own folder (1.5.0): moving the files of an older version, uninstalling
+############################################
+
+SS_FILES="download_sync.sh upload_sync.sh download_roms.sh upload_roms.sh link_download.py sync_engine.py sync.conf .sync_state .sync_base.json roms_filter_sync"
+SS_DIRS=".sync_manifests .catalog_cache"
+
+stop_web_server() {
+    if [ -f "/tmp/save_sync_web.pid" ]; then
+        PID=$(cat /tmp/save_sync_web.pid 2>/dev/null)
+        [ -n "$PID" ] && kill -9 "$PID" 2>/dev/null
+        rm -f /tmp/save_sync_web.pid
+    fi
+    pkill -f "python3.*server.py" 2>/dev/null
+    WEB_STOPPED=true
+}
+
+other_jobs_busy() {
+    pgrep -f "link_download\.py|download_roms\.sh|upload_roms\.sh" >/dev/null 2>&1
+}
+
+# the connection of Save Sync is the [cloud] section of the old shared rclone config
+# ($HOME/.config/rclone on Batocera and KNULLI, the default config of any rclone)
+drop_old_rclone_conf() {
+    local OLD_CONF="$BASE/.config/rclone/rclone.conf"
+    rm -f "$OLD_CONF.bak"
+    [ -f "$OLD_CONF" ] || return 0
+    if grep '^\[' "$OLD_CONF" | grep -qv '^\[cloud\][[:space:]]*$'; then
+        awk '/^\[/{s=($0 ~ /^\[cloud\][[:space:]]*$/)} !s' "$OLD_CONF" > "$OLD_CONF.tmp" && cat "$OLD_CONF.tmp" > "$OLD_CONF"
+        rm -f "$OLD_CONF.tmp"
+        echo "ℹ️  В .config/rclone/rclone.conf есть подключения других программ - они не тронуты"
+    else
+        rm -f "$OLD_CONF"
+        rmdir "$BASE/.config/rclone" 2>/dev/null
+    fi
+}
+
+remove_legacy_files() {
+    local f d
+    for f in $SS_FILES; do rm -f "$BASE/$f"; done
+    for d in $SS_DIRS; do rm -rf "${BASE:?}/$d"; done
+    rm -rf "$BASE"/.ss_tmp* 2>/dev/null
+    rm -f "$BASE/bin/rclone"
+    rmdir "$BASE/bin" 2>/dev/null
+    drop_old_rclone_conf
+}
+
+# copies the files of an older version into APP_DIR; the old ones are removed by
+# finish_migration once the scripts, the hook and the autostart point to the new place.
+# Anything wrong -> the copy is dropped and everything stays as it was.
+migrate_to_app_dir() {
+    [ "$LEGACY_LAYOUT" = true ] || return 0
+    echo "📁 Перенос файлов Save Sync в папку $APP_DIR"
+    if sync_busy || other_jobs_busy; then
+        echo "⏳ Идёт синхронизация или загрузка - жду до 2 минут..."
+        for i in $(seq 1 120); do
+            sync_busy || other_jobs_busy || break
+            sleep 1
+        done
+        if sync_busy || other_jobs_busy; then
+            echo "❌ Синхронизация или загрузка ещё идёт. Ничего не изменено - запустите обновление позже."
+            return 1
+        fi
+    fi
+    stop_web_server
+    local ok=true f d
+    rm -rf "${APP_DIR:?}"
+    mkdir -p "$APP_DIR/bin" || ok=false
+    for f in sync.conf .sync_state .sync_base.json roms_filter_sync; do
+        if [ "$ok" = true ] && [ -f "$BASE/$f" ]; then cp -p "$BASE/$f" "$APP_DIR/$f" || ok=false; fi
+    done
+    for d in $SS_DIRS; do
+        if [ "$ok" = true ] && [ -d "$BASE/$d" ]; then cp -rp "$BASE/$d" "$APP_DIR/" || ok=false; fi
+    done
+    if [ "$ok" = true ] && [ -f "$BASE/bin/rclone" ]; then
+        cp -p "$BASE/bin/rclone" "$APP_DIR/bin/rclone" || ok=false
+    fi
+    local OLD_CONF="$BASE/.config/rclone/rclone.conf"
+    if [ "$ok" = true ] && [ -f "$OLD_CONF" ]; then
+        awk '/^\[/{s=($0 ~ /^\[cloud\][[:space:]]*$/)} s' "$OLD_CONF" > "$APP_DIR/rclone.conf" || ok=false
+        [ -s "$APP_DIR/rclone.conf" ] || ok=false
+        chmod 600 "$APP_DIR/rclone.conf" 2>/dev/null
+    fi
+    if [ "$ok" = true ] && [ -f "$OLD_CONF.bak" ]; then
+        cp -p "$OLD_CONF.bak" "$APP_DIR/rclone.conf.bak" || ok=false
+    fi
+    if [ "$ok" != true ]; then
+        rm -rf "${APP_DIR:?}"
+        echo "❌ Не удалось перенести файлы (нет места?). Ничего не изменено, Save Sync работает как раньше."
+        [ "$WEB_STOPPED" = true ] && bash "$0" --web > /dev/null 2>&1 &
+        return 1
+    fi
+    LEGACY_LAYOUT=false
+    set_paths
+    ensure_rclone_executable
+    MIGRATED=true
+    echo "✅ Настройки, состояние синхронизации и rclone перенесены"
+}
+
+# the autostart line starts download_sync.sh by its full path: it is pointed to where it is now
+fix_autostart_paths() {
+    local AF
+    for AF in "$BASE/custom.sh" "$BASE/services/custom_service"; do
+        [ -f "$AF" ] || continue
+        sed -i "s#/[^ \"']*/download_sync\.sh#$DOWNLOAD_SCRIPT#g" "$AF" 2>/dev/null
+    done
+}
+
+finish_migration() {
+    [ "$MIGRATED" = true ] || return 0
+    fix_autostart_paths
+    remove_legacy_files
+    MIGRATED=false
+    echo "✅ Файлы Save Sync теперь в папке $APP_DIR"
+}
+
+remove_autostart() {
+    local AF
+    for AF in "$BASE/custom.sh" "$BASE/services/custom_service"; do
+        [ -f "$AF" ] || continue
+        awk '
+            /^# (Запуск веб-интерфейса Save Sync|Start the Save Sync web interface)[[:space:]]*$/ { skip = 1; next }
+            skip { if ($0 ~ /^\) &[[:space:]]*$/) skip = 0; next }
+            /download_sync\.sh/ { next }
+            /install_sync\.sh --web/ { next }
+            { print }' "$AF" > "$AF.tmp" && cat "$AF.tmp" > "$AF"
+        rm -f "$AF.tmp"
+    done
+}
+
+uninstall_save_sync() {
+    echo ""
+    echo "══════════════════════════════════════════════════════════"
+    echo " 🗑  Удаление Save Sync"
+    echo "══════════════════════════════════════════════════════════"
+    echo ""
+    echo "Будут удалены: скрипты и настройки Save Sync, rclone, подключение к облаку,"
+    echo "хук выхода из игры, строки автозагрузки и лог."
+    echo "Не будут тронуты: сохранения и ромы на устройстве и всё, что лежит в облаке."
+    echo ""
+    read -p "Для подтверждения введите да: " UNINSTALL_OK
+    case "$UNINSTALL_OK" in
+        да|Да|ДА) ;;
+        *) echo "Отменено. Ничего не удалено."; return 1 ;;
+    esac
+    read -p "Оставить файл настроек sync.conf (исключения, сохранённые ссылки, режимы) для будущей установки? (y/n): " KEEP_CONF
+    echo ""
+    echo "⏹  Останавливаю веб-интерфейс, синхронизацию и загрузки..."
+    stop_web_server
+    stop_sync >/dev/null 2>&1
+    pkill -f "link_download\.py|download_roms\.sh|upload_roms\.sh" 2>/dev/null
+    rm -f "$SCRIPT_DIR/save-sync.sh" "/recalbox/share/userscripts/save-sync[endgame].sh" 2>/dev/null
+    remove_autostart
+    local KEEP_FILE=""
+    if { [ "$KEEP_CONF" = "y" ] || [ "$KEEP_CONF" = "Y" ]; } && [ -f "$CONFIG_FILE" ]; then
+        KEEP_FILE="/tmp/ss_keep_sync.conf"
+        cp -p "$CONFIG_FILE" "$KEEP_FILE"
+    fi
+    rm -rf "${APP_DIR:?}"
+    remove_legacy_files >/dev/null
+    rm -f "$LOG_FILE" "$LOG_FILE".* 2>/dev/null
+    rm -rf /tmp/save_sync_* 2>/dev/null
+    if [ -n "$KEEP_FILE" ]; then
+        mkdir -p "$APP_DIR" && mv -f "$KEEP_FILE" "$APP_DIR/sync.conf"
+        echo "📄 Файл настроек оставлен: $APP_DIR/sync.conf"
+    fi
+    echo "✅ Save Sync удалён."
+    echo "   Установщик $0 оставлен: удалите его, если он больше не нужен, или запустите снова для установки."
+    return 0
+}
+
 if [ "$1" = "--config" ]; then
     show_control_panel
     exit 0
+fi
+
+if [ "$1" = "--uninstall" ]; then
+    uninstall_save_sync
+    exit $?
 fi
 
 ############################################
@@ -12728,18 +15226,20 @@ if [ -f "$RCLONE_CONF" ] && [ -f "$DOWNLOAD_SCRIPT" ] && [ -f "$UPLOAD_SCRIPT" ]
     echo " Save Sync уже установлен ($SYSTEM)"
     echo "══════════════════════════════════════════════════════════"
     echo ""
-    echo " 1 - Обновить до v1.4.8"
+    echo " 1 - Обновить до v1.5.0"
     echo " 2 - Переустановить заново"
-    echo " 3 - Выход"
+    echo " 3 - Удалить"
+    echo " 4 - Выход"
     echo ""
-    read -p "Выберите вариант (1-3): " REINSTALL_CHOICE
+    read -p "Выберите вариант (1-4): " REINSTALL_CHOICE
     case "$REINSTALL_CHOICE" in
     1)
         echo ""
         echo "══════════════════════════════════════════════════════════"
-        echo " 📦 Обновление до v1.4.8"
+        echo " 📦 Обновление до v1.5.0"
         echo "══════════════════════════════════════════════════════════"
         echo ""
+        migrate_to_app_dir || exit 1
 
         if [ ! -f "$CONFIG_FILE" ]; then
             create_default_config
@@ -12800,6 +15300,7 @@ if [ -f "$RCLONE_CONF" ] && [ -f "$DOWNLOAD_SCRIPT" ] && [ -f "$UPLOAD_SCRIPT" ]
             sed -i -e 's#^\([[:space:]]*\)\(bash \)\{0,1\}\(/[^ ]*download_sync\.sh\) &$#\1[ "$1" = "stop" ] || \2\3 \&#' \
                    -e 's#^\([[:space:]]*\)\(bash \)\{0,1\}\(/[^ ]*install_sync\.sh --web\) &$#\1[ "$1" = "stop" ] || \2\3 \&#' "$AF" 2>/dev/null
         done
+        finish_migration
 
         # Добавляем веб-интерфейс если нет
         if ! grep -q "install_sync.sh --web" "$AUTOLOAD_FILE" 2>/dev/null; then
@@ -12821,9 +15322,9 @@ EOF
         fi
         
         echo ""
-        echo "✅ Обновление до v1.4.8 завершено!"
+        echo "✅ Обновление до v1.5.0 завершено!"
 
-        log_msg "Обновление до v1.4.8 завершено"
+        log_msg "Обновление до v1.5.0 завершено"
 
         restart_web_after_update
 
@@ -12874,6 +15375,7 @@ EOF
     2)
         # Переустановка - удаляем и устанавливаем заново
         echo "🗑️ Удаление старых файлов..."
+        migrate_to_app_dir || exit 1
         rm -f "$DOWNLOAD_SCRIPT" "$UPLOAD_SCRIPT" "$DOWNLOAD_ROMS" "$UPLOAD_ROMS" "$LINK_SCRIPT" 2>/dev/null
         rm -f "$SCRIPT_DIR/save-sync.sh" 2>/dev/null
         rm -f "/recalbox/share/userscripts/save-sync[endgame].sh" 2>/dev/null
@@ -12883,6 +15385,10 @@ EOF
         # Переходим к установке
         ;;
     3)
+        uninstall_save_sync
+        exit $?
+        ;;
+    4)
         echo "Выход..."
         exit 0
         ;;
@@ -12899,11 +15405,12 @@ fi
 
 echo ""
 echo "══════════════════════════════════════════════════════════"
-echo " Save Sync v1.4.8 - Установка"
+echo " Save Sync v1.5.0 - Установка"
 echo " $SYSTEM"
 echo "══════════════════════════════════════════════════════════"
 echo ""
 
+migrate_to_app_dir || exit 1
 mkdir -p "$BIN_DIR" || { echo "❌ Ошибка создания $BIN_DIR"; exit 1; }
 mkdir -p "$CONFIG_DIR" || { echo "❌ Ошибка создания $CONFIG_DIR"; exit 1; }
 mkdir -p "$SCRIPT_DIR" || { echo "❌ Ошибка создания $SCRIPT_DIR"; exit 1; }
@@ -13007,6 +15514,8 @@ for AF in "$BASE/custom.sh" "$BASE/services/custom_service"; do
     sed -i -e 's#^\([[:space:]]*\)\(bash \)\{0,1\}\(/[^ ]*download_sync\.sh\) &$#\1[ "$1" = "stop" ] || \2\3 \&#' \
            -e 's#^\([[:space:]]*\)\(bash \)\{0,1\}\(/[^ ]*install_sync\.sh --web\) &$#\1[ "$1" = "stop" ] || \2\3 \&#' "$AF" 2>/dev/null
 done
+finish_migration
+[ "$WEB_STOPPED" = true ] && restart_web_after_update
 
 # Добавляем веб-интерфейс если нет
 if ! grep -q "install_sync.sh --web" "$AUTOLOAD_FILE" 2>/dev/null; then
@@ -13031,7 +15540,7 @@ fi
 
 SYSTEM_VERSION=$(get_system_version)
 
-log_msg "Save Sync v1.4.8 | $SYSTEM ($SYSTEM_VERSION) | rclone v${NEW_VER:-unknown}"
+log_msg "Save Sync v1.5.0 | $SYSTEM ($SYSTEM_VERSION) | rclone v${NEW_VER:-unknown}"
 log_msg "Установка завершена"
 
 echo ""
