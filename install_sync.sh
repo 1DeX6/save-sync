@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ################################################
-# Save Sync Installer v1.5.0
+# Save Sync Installer v1.6.0
 # Облачная синхронизация сохранений и ромов
 # Batocera / KNULLI / Recalbox
 #
@@ -43,6 +43,10 @@ SYNC_INTERVAL=0
 MAX_RETRIES=3
 CONFLICT_KEEP_DAYS=3
 NOTIFICATIONS="true"
+SYNC_STATES="true"
+HISTORY_KEEP_DAYS=7
+HISTORY_KEEP_COUNT=3
+UPDATE_CHECK="true"
 SKIP_UNCHANGED="true"
 SYNC_MODE=""
 MIN_FREE_KB=51200
@@ -64,6 +68,16 @@ REMOTE_ROMS=""
 FIRST_SYNC_MARKER=""
 
 # Функция паузы
+# the web interface started from the console: in its own session, so closing the
+# console window (SSH) does not stop it
+web_detached() {
+    if command -v setsid > /dev/null 2>&1; then
+        setsid bash "$0" --web > /dev/null 2>&1 < /dev/null &
+    else
+        nohup bash "$0" --web > /dev/null 2>&1 < /dev/null &
+    fi
+}
+
 pause() {
     echo
     read -p "Нажмите Enter для продолжения..."
@@ -109,7 +123,7 @@ ensure_rclone_executable() {
 create_default_config() {
     cat > "$CONFIG_FILE" << 'EOF'
 # ========================================
-# Save Sync v1.5.0 - Главный конфиг
+# Save Sync v1.6.0 - Главный конфиг
 # ========================================
 
 # ── НАСТРОЙКИ СИНХРОНИЗАЦИИ ──
@@ -124,6 +138,16 @@ CONFLICT_KEEP_DAYS="3"
 
 # Уведомления на экране (Batocera, KNULLI): о полученных/отправленных сохранениях и ошибках. true / false
 NOTIFICATIONS="true"
+
+# Быстрые сохранения (save states): true - синхронизировать, false - не отправлять и не скачивать (копии в облаке остаются)
+SYNC_STATES="true"
+
+# Прежние версии сохранений в облаке (GameSaves_savesync/history): сколько дней хранить (0 = не хранить) и сколько версий каждого файла
+HISTORY_KEEP_DAYS="7"
+HISTORY_KEEP_COUNT="3"
+
+# Сообщать о новой версии Save Sync (раз в день спрашивается GitHub): true / false
+UPDATE_CHECK="true"
 
 # Синхронизация после игры: economy (только при изменениях), fast (после каждой игры) или full (полная)
 SYNC_MODE="economy"
@@ -379,6 +403,18 @@ sync_mode_label() {
     esac
 }
 
+hist_label() {
+    if [ "${HISTORY_KEEP_DAYS:-7}" = "0" ]; then echo "не хранить"; else echo "${HISTORY_KEEP_DAYS:-7} дн., до ${HISTORY_KEEP_COUNT:-3} верс."; fi
+}
+
+update_label() {
+    if [ "${UPDATE_CHECK:-true}" = "false" ]; then echo "не сообщать"; else echo "сообщать"; fi
+}
+
+states_label() {
+    if [ "${SYNC_STATES:-true}" = "false" ]; then echo "не синхронизируются"; else echo "синхронизируются"; fi
+}
+
 keep_days_label() {
     if [ "${CONFLICT_KEEP_DAYS:-3}" = "0" ]; then echo "не хранить"; else echo "${CONFLICT_KEEP_DAYS:-3} дн."; fi
 }
@@ -401,6 +437,10 @@ load_config() {
                 MAX_RETRIES) MAX_RETRIES="$value" ;;
                 CONFLICT_KEEP_DAYS) CONFLICT_KEEP_DAYS="$value" ;;
                 NOTIFICATIONS) NOTIFICATIONS="$value" ;;
+                SYNC_STATES) SYNC_STATES="$value" ;;
+                HISTORY_KEEP_DAYS) HISTORY_KEEP_DAYS="$value" ;;
+                HISTORY_KEEP_COUNT) HISTORY_KEEP_COUNT="$value" ;;
+                UPDATE_CHECK) UPDATE_CHECK="$value" ;;
                 SKIP_UNCHANGED) SKIP_UNCHANGED="$value" ;;
                 SYNC_MODE) SYNC_MODE="$value" ;;
                 MIN_FREE_KB) MIN_FREE_KB="$value" ;;
@@ -431,7 +471,7 @@ load_config() {
 save_config() {
     cat > "$CONFIG_FILE" << EOF
 # ========================================
-# Save Sync v1.5.0 - Главный конфиг
+# Save Sync v1.6.0 - Главный конфиг
 # ========================================
 
 # ── НАСТРОЙКИ СИНХРОНИЗАЦИИ ──
@@ -439,6 +479,10 @@ SYNC_INTERVAL="$SYNC_INTERVAL"
 MAX_RETRIES="$MAX_RETRIES"
 CONFLICT_KEEP_DAYS="$CONFLICT_KEEP_DAYS"
 NOTIFICATIONS="${NOTIFICATIONS:-true}"
+SYNC_STATES="${SYNC_STATES:-true}"
+HISTORY_KEEP_DAYS="${HISTORY_KEEP_DAYS:-7}"
+HISTORY_KEEP_COUNT="${HISTORY_KEEP_COUNT:-3}"
+UPDATE_CHECK="${UPDATE_CHECK:-true}"
 SYNC_MODE="${SYNC_MODE:-economy}"
 MIN_FREE_KB="$MIN_FREE_KB"
 
@@ -967,7 +1011,7 @@ create_engine_script() {
 #   changed only here      -> uploaded
 #   changed only in cloud  -> downloaded (never overwritten by a stale copy)
 #   changed on both sides  -> the newer one is kept; the older one can be kept for a
-#                             few days in <folder>_conflicts/ (CONFLICT_KEEP_DAYS, 0 = off)
+#                             few days in <folder>_savesync/conflicts/ (CONFLICT_KEEP_DAYS, 0 = off)
 #   deleted here           -> deleted in the cloud
 #   deleted on another dev -> deleted here too
 #   new on another device  -> downloaded (never deleted as "missing here")
@@ -1012,7 +1056,10 @@ SYSTEM = "__SS_SYSTEM__"
 BASE_FILE = os.path.join(BASE_DIR, ".sync_base.json")
 MANIFEST = ".sync_manifest.json"
 MCACHE_DIR = os.path.join(BASE_DIR, ".sync_manifests")     # copies of the cloud manifests
-CONFLICTS = REMOTE.rstrip("/") + "_conflicts"
+# one service folder next to the saves folder: <folder>_savesync/{conflicts,history,playing}
+SERVICE = REMOTE.rstrip("/") + "_savesync"
+CONFLICTS = SERVICE + "/conflicts"
+OLD_CONFLICTS = REMOTE.rstrip("/") + "_conflicts"     # where 1.5.0 kept them: moved over
 PORTS_CLOUD = "_ports"
 PORTS_KEY = "PortMaster"                  # one exclusion entry for the saves of all ports
 PORT_NOT_GAMES = {"PortMaster", "autoinstall", "images", "videos", "manuals"}
@@ -1035,7 +1082,101 @@ SAVE_MAX = 512 * 1024 * 1024        # a bigger file is a disk image or a game, n
 SKIPPED = {"heavy": set(), "big": {}}
 # saves folders of standalone emulators named not like the ROM folder of their system
 SAVE_DIR_ROMS = {"dolphin-emu": ("gamecube", "wii", "triforce"), "duckstation": ("psx",),
-                 "ymir": ("saturn",), "nanoboyadvance": ("gba",)}
+                 "ymir": ("saturn",), "nanoboyadvance": ("gba",), "doom": ("prboom", "gzdoom")}
+# ...of them, the ones whose saves are named after the game files (a WAD of DOOM): checked against the ROMs
+SAVES_NAMED_BY_ROM = {"doom"}
+# MAME settings of this device (cfg/<game>.cfg, cfg/default.cfg - in mame/cfg or, for the
+# libretro cores, in mame/<core>/cfg): button mapping, made for its own controls. High
+# scores (hi) and the board memory (nvram, .nv) are synced.
+DEVICE_CFG_SYSTEMS = ("mame",)          # mame, mame2003-plus, mame2010...: by prefix
+# Save states ("quick saves"), as Batocera / KNULLI / Recalbox set the emulators up:
+# RetroArch slots (game.state, .state1.., .state.auto) with their pictures, and the state
+# files and folders of standalone emulators: PPSSPP (PSP/PPSSPP_STATE, .ppst), PCSX2
+# (sstates, .p2s), Dolphin (StateSaves), DuckStation (duckstation/<serial>_<slot>.sav, next
+# to the memcards folder), MAME (mame/state), melonDS (.ml1..), mupen64plus and Supermodel
+# (.st0..), Azahar/Citra (states, .cst), Ymir (.savestate), Amiberry/FS-UAE (.uss).
+# SYNC_STATES="false": they are neither sent nor downloaded on this device; the copies
+# already in the cloud stay as they are.
+STATE_NAME_RE = re.compile(r"\.(state(\d+|\.auto)?(\.png)?|ppst|p2s|savestate|cst|uss|ml\d|st\d+)$", re.I)
+STATE_DIRS = {"ppsspp_state", "sstates", "statesaves", "savestates", "states"}
+
+
+def is_state(rel):
+    low = rel.lower().split("/")
+    if STATE_NAME_RE.search(low[-1]):
+        return True
+    if any(p in STATE_DIRS for p in low[1:-1]):
+        return True
+    if len(low) > 2 and low[0].startswith("mame") and low[1] == "state":
+        return True
+    return len(low) == 2 and low[0] == "duckstation" and low[1].endswith(".sav")
+
+
+_CONF = None
+
+
+def conf(key, default=""):
+    """A setting of sync.conf of this device (read once)."""
+    global _CONF
+    if _CONF is None:
+        _CONF = {}
+        try:
+            with open(os.path.join(BASE_DIR, "sync.conf")) as f:
+                for line in f:
+                    m = re.match(r'^([A-Z_]+)="?(.*?)"?$', line.strip())
+                    if m:
+                        _CONF[m.group(1)] = m.group(2)
+        except OSError:
+            pass
+    return _CONF.get(key, default)
+
+
+def conf_int(key, default, env=None, lo=0, hi=3650):
+    val = os.environ.get(env) if env else None
+    if val is None:
+        val = conf(key, str(default))
+    try:
+        return min(hi, max(lo, int(val)))
+    except ValueError:
+        return default
+
+
+def states_synced():
+    """Setting SYNC_STATES of sync.conf (SS_STATES in the environment wins)."""
+    val = os.environ.get("SS_STATES")
+    if val is None:
+        val = conf("SYNC_STATES", "true")
+    return val.strip().lower() not in ("false", "0", "no")
+
+
+# Previous versions of the saves: before the cloud replaces or deletes a save, the version
+# it has goes to <folder>_savesync/history (named like the conflict copies: <path>.<device>.<time>,
+# the device that made that version and the time it was replaced; ".deleted" when it was
+# deleted). HISTORY_KEEP_DAYS (0 = not kept) and HISTORY_KEEP_COUNT (per file).
+HISTORY = SERVICE + "/history"
+
+
+def hist_days():
+    return conf_int("HISTORY_KEEP_DAYS", 7, "SS_HIST_DAYS")
+
+
+def hist_count():
+    return conf_int("HISTORY_KEEP_COUNT", 3, "SS_HIST_COUNT", 1, 100)
+
+
+# "A game is open on this device": <folder>_savesync/playing/<device>.json is written when a game
+# starts and removed after the sync that follows the game. If the device is switched off
+# in the middle of a game, the mark stays and the other devices warn about it.
+PLAYING = SERVICE + "/playing"
+OWN_MARK = os.path.join(BASE_DIR, ".playing_own.json")
+MARKS_CACHE = os.path.join(BASE_DIR, ".playing_cache.json")
+PLAYING_FLAG = "/tmp/save_sync_playing"         # gone after a reboot: the game was not closed
+
+SS_VERSION = "1.6.0"
+UPDATE_FILE = os.path.join(BASE_DIR, ".update_check.json")
+RELEASES_API = "https://api.github.com/repos/1DeX6/save-sync/releases/latest"
+
+
 PORT_SAVE_DIRS = ("saves", "conf")
 # caches of the graphics driver and of emulators: created by every device for its
 # own GPU, useless elsewhere and can grow large - never synced, wherever they are
@@ -1054,6 +1195,9 @@ MSG = {
         "copy_kept": ", the older one is kept for {days} d. in {dir} (it can be restored in the web interface)",
         "restored": "Restored the version of {file} from {dev} ({time}); the previous version is kept with the conflicts",
         "conflict_dropped": "Deleted the conflict copy of {file} ({dev}, {time})",
+        "hist_dropped": "Deleted the previous version of {file} ({dev}, {time})",
+        "deleted_web": "Deleted from the web interface (the sync deletes it everywhere): {rel}",
+        "deleted_web_here": "Deleted from the web interface on this device only (the system is not synced here): {rel}",
         "time_unknown": "time unknown",
         "deleted_here": "Removed here (deleted on another device): {rel}",
         "deleted_cloud": "Removed from the cloud: {rel}",
@@ -1075,6 +1219,10 @@ MSG = {
         "other_device": "another device",
         "heavy_skip": "{sys}: installed games, updates and add-ons are not synced - only the saves",
         "big_skip": "Skipped {rel} ({mb} MB): larger than {max} MB - looks like a disk image or an installed game, not a save",
+        "restored_hist": "Restored the previous version of {file} from {dev} ({time})",
+        "mark_note": "Save Sync: saves from {dev} were not uploaded",
+        "mark_cleared": "The game {game} was continued here: the mark of the unclosed game on {dev} is removed",
+        "update_note": "Save Sync: version {v} is available",
     },
     "ru": {
         "conflict_local": "Конфликт сохранений: {rel} изменён на разных устройствах - оставлена более новая версия с этого устройства",
@@ -1082,6 +1230,9 @@ MSG = {
         "copy_kept": ", более старая хранится {days} дн. в {dir} (её можно вернуть в веб-интерфейсе)",
         "restored": "Возвращена версия {file} с {dev} ({time}); прежняя версия сохранена в конфликтах",
         "conflict_dropped": "Удалена копия при конфликте: {file} ({dev}, {time})",
+        "hist_dropped": "Удалена прежняя версия {file} ({dev}, {time})",
+        "deleted_web": "Удалено через веб-интерфейс (синхронизация удалит везде): {rel}",
+        "deleted_web_here": "Удалено через веб-интерфейс только на этом устройстве (система здесь не синхронизируется): {rel}",
         "time_unknown": "время неизвестно",
         "deleted_here": "Удалено здесь (удалено на другом устройстве): {rel}",
         "deleted_cloud": "Удалено из облака: {rel}",
@@ -1103,6 +1254,10 @@ MSG = {
         "other_device": "другого устройства",
         "heavy_skip": "{sys}: установленные игры, обновления и дополнения не синхронизируются - только сохранения",
         "big_skip": "Пропущен файл {rel} ({mb} МБ): больше {max} МБ - похоже на образ диска или установленную игру, а не на сохранение",
+        "restored_hist": "Возвращена прежняя версия {file} с {dev} ({time})",
+        "mark_note": "Save Sync: сохранения с {dev} не выгружены",
+        "mark_cleared": "Игра {game} продолжена здесь: отметка о незакрытой игре на {dev} снята",
+        "update_note": "Save Sync: доступна версия {v}",
     },
 }
 
@@ -1279,6 +1434,15 @@ def refresh_listing(root, C, uploaded, deleted, peek=None):
 def mstat(v):
     """(size, date) of a listing entry in one form (JSON turns tuples into lists)."""
     return [v[0], v[1]] if v and v[1] else None
+
+
+USER_DEL_KEEP = 30 * 86400        # how long the manifest keeps "deleted on purpose"
+
+
+def manifest_deleted(raw):
+    """{rel: {"d": device, "t": time}} - files deleted in the web interface of a device."""
+    d = raw.get("deleted") if isinstance(raw, dict) else None
+    return {r: e for r, e in d.items() if isinstance(e, dict)} if isinstance(d, dict) else {}
 
 
 def manifest_stats(all_roots):
@@ -1473,15 +1637,20 @@ class Root:
     def label(self, rel):
         return rel if self.name == "saves" else "%s/%s" % (self.name, rel)
 
-    def conflict_path(self, rel, tag):
+    def conflict_path(self, rel, tag, folder=None):
         sub = rel if self.name == "saves" else "%s/%s/%s" % (PORTS_CLOUD, self.name[len("ports/"):], rel)
-        return "%s/%s.%s" % (CONFLICTS, sub, tag)
+        return "%s/%s.%s" % (folder or CONFLICTS, sub, tag)
 
 
 # What in a ROM folder is not a game. Not .png and .json: PICO-8 games are .p8.png pictures.
 NOT_ROMS_EXT = (".xml", ".txt", ".dat", ".log", ".cache", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
                 ".mp4", ".avi", ".mkv", ".webm", ".pdf", ".nfo", ".md", ".db", ".tmp", ".bak",
-                ".crdownload", ".partial")
+                ".crdownload", ".partial", ".cfg", ".ini", ".disabled")
+# BIOS archives put next to the games (arcade cores look for them there): not games
+BIOS_SETS = {"neogeo", "neocdz", "naomi", "naomi2", "naomigd", "awbios", "hod2bios", "f355bios", "f355dlx", "airlbios",
+               "pgm", "skns", "isgsm", "hng64", "cpzn1", "cpzn2", "decocass", "nmk004", "ym2608", "qsound", "stvbios",
+               "coleco", "msx", "spectrum", "channelf", "konamigx", "taitofx1", "tps", "atarisy1", "megaplay", "megatech",
+               "playch10", "sys573", "bubsys", "acpsx", "cchip", "galaxian", "segasp", "triforce", "chihiro"}
 NOT_ROMS_NAMES = {".ds_store", "thumbs.db", "desktop.ini", ".keep", ".gitkeep", ".localized"}
 # scraped media (Batocera, KNULLI, ES-DE, Skraper)
 NOT_ROMS_DIRS = {"images", "media", "videos", "manuals", "bezels", "covers", "backcovers", "3dboxes", "fanart",
@@ -1492,8 +1661,9 @@ NOT_ROMS_DIRS = {"images", "media", "videos", "manuals", "bezels", "covers", "ba
 
 def _not_a_game(name):
     low = name.lower()
+    stem, ext = os.path.splitext(low)
     return (low.endswith(NOT_ROMS_EXT) or low in NOT_ROMS_NAMES or low.startswith("._")
-            or low.endswith(":zone.identifier"))
+            or low.endswith(":zone.identifier") or (ext in (".zip", ".7z") and stem in BIOS_SETS))
 
 
 def _has_files(path, skip_media):
@@ -1506,10 +1676,13 @@ def _has_files(path, skip_media):
 
 
 def make_system_active():
-    """A system's saves are synced only if the system is in use on this device: it has
-    games (ROMs) here, or its saves are already here. Saves of systems this device has
-    no games for are not downloaded (they can be big); once ROMs or saves appear
-    here, the system joins the next sync and the cloud saves come down first."""
+    """A system's saves are synced only if its games (ROMs) are on this device. Batocera,
+    KNULLI and Recalbox make a ROM folder for every system: a ROM folder without games means
+    the system is not used here - its saves are not synced, even old ones left here (they
+    stay as they are; deleted here, they stay in the cloud and on the other devices). A save
+    folder with no ROM folder of that name at all (an emulator whose save folder is named
+    otherwise) is synced when its saves are here. Once ROMs appear, the system joins the
+    next sync and the cloud saves come down first."""
     cache = {}
     roms_known = os.path.isdir(ROMS_DIR)
 
@@ -1517,21 +1690,22 @@ def make_system_active():
         if system not in cache:
             ok = not roms_known             # no ROMs folder to judge by: sync everything
             if not ok:
-                for name in (system,) + SAVE_DIR_ROMS.get(system, ()):
-                    d = os.path.join(ROMS_DIR, name)
-                    if os.path.isdir(d) and _has_files(d, True):
-                        ok = True
-                        break
-            if not ok:
-                d = os.path.join(SAVE_DIR, system)
-                ok = os.path.isdir(d) and _has_files(d, False)
+                dirs = [os.path.join(ROMS_DIR, n) for n in (system,) + SAVE_DIR_ROMS.get(system, ())]
+                dirs = [d for d in dirs if os.path.isdir(d)]
+                if dirs:
+                    ok = any(_has_files(d, True) for d in dirs)
+                else:
+                    d = os.path.join(SAVE_DIR, system)
+                    ok = os.path.isdir(d) and _has_files(d, False)
             cache[system] = ok
         return cache[system]
     return active
 
 
-def saves_accept(ex):
-    active = make_system_active()
+def saves_accept(ex, any_system=False):
+    """any_system: also the systems not synced here (no games here) - for the list by game."""
+    active = (lambda system: True) if any_system else make_system_active()
+    states_on = states_synced()
 
     def accept(rel, size):
         parts = rel.split("/")
@@ -1541,6 +1715,10 @@ def saves_accept(ex):
             return False
         if skip_name(parts[-1]):
             return False
+        if parts[0].lower().startswith(DEVICE_CFG_SYSTEMS) and any(p.lower() == "cfg" for p in parts[1:-1]):
+            return False                # device's own MAME settings (mame/cfg, mame/mame2003-plus/cfg...); the cloud copy is left alone
+        if not states_on and is_state(rel):
+            return False                # save states are off on this device; the cloud copy stays
         if len(parts) > 2 and any(fnmatch.fnmatchcase(rel.lower(), p) for p in HEAVY_PATHS):
             SKIPPED["heavy"].add(parts[0])
             return False
@@ -1785,6 +1963,7 @@ def run(fast=False):
     # changed here (a file is deleted here only when the cloud confirms it is gone).
     # Anything unusual - first sync, a folder without a manifest - gives the full sync.
     manifest_reads = None
+    user_del = set(load_json(USER_DEL_FILE, []) or [])     # deleted in the web interface on purpose
     manifest_failed = False
     mread = {}          # root name -> [size, date] of the manifest that was read (when known)
     if fast:
@@ -1864,6 +2043,7 @@ def run(fast=False):
             M = json.loads(mout) if rc == 0 and mout.strip() else {}
         except ValueError:
             M = {}
+        MD = manifest_deleted(M)            # deleted on purpose (web interface) by a device
         M = M.get("files", {}) if isinstance(M, dict) else {}
         cand = None
         cloud_seen = True
@@ -1971,11 +2151,11 @@ def run(fast=False):
 
             # mass-deletion guard: an empty listing is a failure, not a deletion
             limit = max(5, len(base) // 2)
-            if len(del_local) > limit:
+            if len([r for r in del_local if r not in MD]) > limit:
                 log(t("guard", n=len(del_local), where=t("where_cloud")))
                 FLAGS["guard"] = True
                 del_local = []
-            if len(del_cloud) > limit:
+            if len([r for r in del_cloud if r not in user_del]) > limit:
                 log(t("guard", n=len(del_cloud), where=t("where_here")))
                 FLAGS["guard"] = True
                 del_cloud = []
@@ -1989,6 +2169,34 @@ def run(fast=False):
                         (M.get(rel) or {}).get("d") or "cloud", stamp))])
                 for rel in won_cloud:
                     rclone(["copyto", os.path.join(root.local, *rel.split("/")), root.conflict_path(rel, "%s.%s" % (dev, stamp))])
+
+            # 1b. the version in the cloud that is about to be replaced or deleted goes to
+            # <folder>_savesync/history first: the cloud copies it in place, nothing is downloaded.
+            # Not when the losing version of a conflict is already kept in _conflicts, and
+            # not for a file whose content stays in the cloud under another name (save slots
+            # that shift). A copy that did not work does not stop the sync.
+            if hist_days():
+                stays = {(L[r]["h"], L[r]["s"]) for r in up}
+                hist = [(r, "") for r in up if r in C]
+                hist += [(r, ".deleted") for r in del_cloud
+                         if not (base.get(r) and (base[r].get("h"), base[r].get("s")) in stays)]
+                if not keep:
+                    hist += [(r, "") for r in won_local]
+
+                def to_history(item):
+                    rel, tail = item
+                    who = (M.get(rel) or {}).get("d") or "cloud"
+                    if not re.match(r"^[A-Za-z0-9_-]+$", who):
+                        who = "cloud"
+                    return rclone(["copyto", root.remote + "/" + rel,
+                                   root.conflict_path(rel, "%s.%s%s" % (who, stamp, tail), HISTORY),
+                                   "--ignore-times"], check=False)[0]
+
+                if len(hist) > 1:
+                    with ThreadPoolExecutor(max_workers=4) as pool_ex:
+                        list(pool_ex.map(to_history, hist))
+                elif hist:
+                    to_history(hist[0])
 
             # 2. a file that only got another name (save slots shift when one is
             # deleted: .state2 becomes .state1) is already in the cloud under the old
@@ -2220,10 +2428,19 @@ def run(fast=False):
                                  "t": old_e.get("t") or parse_time(c[1])}
             return newM
 
+        def build_deleted(fresh_del, newM):
+            now = int(time.time())
+            out = {r: e for r, e in fresh_del.items() if now - e.get("t", 0) < USER_DEL_KEEP and r not in newM}
+            for r in del_cloud:
+                if r in user_del:
+                    out[r] = {"d": dev, "t": now}
+            return out
+
         # nothing to change in the manifest -> nothing to write, so no need to read it again
-        fresh = M
+        fresh, fresh_del = M, MD
         newM = build_manifest(fresh)
-        if newM != fresh:
+        newD = build_deleted(fresh_del, newM)
+        if newM != fresh or newD != fresh_del:
             # read again only when the manifest changed since it was read (its size and date
             # now: from the listing above, or asked); unknown -> read again, as before
             same_st = False
@@ -2233,12 +2450,17 @@ def run(fast=False):
             if not same_st:
                 rc, mout = rclone(["cat", root.remote + "/" + MANIFEST], check=False)
                 try:
-                    fresh = json.loads(mout).get("files", {}) if rc == 0 and mout.strip() else {}
+                    raw = json.loads(mout) if rc == 0 and mout.strip() else {}
+                    fresh, fresh_del = raw.get("files", {}), manifest_deleted(raw)
                 except (ValueError, AttributeError):
-                    fresh = {}
+                    fresh, fresh_del = {}, {}
                 newM = build_manifest(fresh)
-        if newM != fresh:
-            data = json.dumps({"version": 1, "files": newM}, ensure_ascii=False, separators=(",", ":")).encode()
+                newD = build_deleted(fresh_del, newM)
+        if newM != fresh or newD != fresh_del:
+            mj = {"version": 1, "files": newM}
+            if newD:
+                mj["deleted"] = newD
+            data = json.dumps(mj, ensure_ascii=False, separators=(",", ":")).encode()
             t0 = time.monotonic()
             stage("finish")
             mcache_drop(root)
@@ -2255,21 +2477,31 @@ def run(fast=False):
 
     base_all["roots"] = new_base_roots
     base_all["device"] = dev
+    try:
+        os.remove(USER_DEL_FILE)        # done: those deletions went through this sync
+    except OSError:
+        pass
     if manifest_failed:
         base_all["manifest_pending"] = True
     else:
         base_all.pop("manifest_pending", None)
     save_json(BASE_FILE, base_all)
 
-    # old conflict copies are removed by any device during its sync (at most once
-    # a day, or right away after the setting changed). The age is taken from the
-    # date in the copy's name, i.e. from the moment the conflict happened.
-    keep = keep_days()
-    if not fast and clock_ok and (now - base_all.get("cleaned", 0) > 86400 or base_all.get("cleaned_keep") != keep):
-        if clean_conflicts(keep, now):
-            base_all["cleaned"] = now
-            base_all["cleaned_keep"] = keep
-            save_json(BASE_FILE, base_all)
+    # old conflict copies and old versions are removed by any device during its full sync
+    # (at most once a day, or right away after the setting changed; the first full sync of
+    # this version also moves the conflict copies of 1.5.0). That is done after the result
+    # of the sync is written - see run_cleanup.
+    cleanup = []
+    if not fast and clock_ok and (now - base_all.get("cleaned", 0) > 86400 or base_all.get("cleaned_keep") != keep_days()
+                                  or not base_all.get("service_dir")):
+        cleanup.append("conflicts")
+    if not fast and clock_ok and (now - base_all.get("hcleaned", 0) > 86400
+                                  or base_all.get("hcleaned_set") != [hist_days(), hist_count()]):
+        cleanup.append("history")
+    try:
+        marks_after_sync(fast)
+    except (SyncError, OSError, ValueError, subprocess.SubprocessError):
+        pass
 
     summary = t("summary", d=total["d"], u=total["u"], c=total["c"], x=total["x"])
     # short note for the "Saves uploaded / downloaded" log line of the calling script
@@ -2289,6 +2521,48 @@ def run(fast=False):
         print(summary)
     else:
         print(json.dumps(total))
+    if cleanup:
+        # a process of its own: it waits for this sync to end (the lock), the calling
+        # script writes the result meanwhile
+        try:
+            subprocess.Popen([sys.executable or "python3", os.path.abspath(__file__), "cleanup"] + cleanup,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True, close_fds=True)
+        except OSError:
+            pass
+    return 0
+
+
+def run_cleanup(jobs):
+    """Old conflict copies (and the move of the 1.5.0 ones) and old versions - both at once:
+    they are in different folders. Each request can take seconds on a slow cloud."""
+    lock = open(ENGINE_LOCK, "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)     # after the sync that asked for it
+    now = int(time.time())
+    keep, hset = keep_days(), [hist_days(), hist_count()]
+
+    def conflicts_job():
+        move_old_conflicts()
+        return clean_conflicts(keep, now)
+
+    tasks = {}
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        if "conflicts" in jobs:
+            tasks["conflicts"] = ex.submit(conflicts_job)
+        if "history" in jobs:
+            tasks["history"] = ex.submit(clean_history, hset[0], hset[1], now)
+    base_all = load_json(BASE_FILE, {})
+    for name, fut in tasks.items():
+        try:
+            ok = fut.result()
+        except (SyncError, OSError, ValueError, subprocess.SubprocessError):
+            ok = False
+        if ok and name == "conflicts":
+            base_all.update({"cleaned": now, "cleaned_keep": keep, "service_dir": 1})
+        elif ok:
+            base_all.update({"hcleaned": now, "hcleaned_set": hset})
+    if base_all.get("roots") is not None:
+        save_json(BASE_FILE, base_all)
     return 0
 
 
@@ -2377,6 +2651,18 @@ def run_mirror():
 STAMP_RE = re.compile(r"\.(\d{4})-(\d\d)-(\d\d)_(\d\d)-(\d\d)-(\d\d)(?:\.deleted)?$")
 
 
+def move_old_conflicts():
+    """Conflict copies of 1.5.0 (<folder>_conflicts) go to <folder>_savesync/conflicts: moved
+    inside the cloud, nothing is downloaded; the empty old folder is removed."""
+    rc, out = rclone(["lsjson", "--files-only", "--no-mimetype", "-R", OLD_CONFLICTS], check=False)
+    if rc != 0 or not out.strip() or out.strip() == "[]":
+        if rc == 0:
+            rclone(["rmdirs", OLD_CONFLICTS], check=False)
+        return
+    rclone(["move", OLD_CONFLICTS, CONFLICTS, "--delete-empty-src-dirs"], check=False)
+    rclone(["rmdirs", OLD_CONFLICTS], check=False)
+
+
 def clean_conflicts(keep, now):
     """Removes conflict copies older than the setting of this device. A device that keeps
     no copies (0) does not touch them at all: copies made by other devices stay for as
@@ -2412,7 +2698,7 @@ def clean_conflicts(keep, now):
 
 
 # ================================================================== conflict copies
-# <folder>_conflicts/<path>.<device>.<YYYY-MM-DD_hh-mm-ss>: the version that lost a conflict
+# <folder>_savesync/conflicts/<path>.<device>.<YYYY-MM-DD_hh-mm-ss>: the version that lost a conflict
 CONFLICT_RE = re.compile(r"^(.+)\.([A-Za-z0-9_-]+)\.(\d{4}-\d\d-\d\d_\d\d-\d\d-\d\d|time-unknown-\d+)(\.deleted)?$")
 
 
@@ -2466,7 +2752,7 @@ def list_conflicts():
         # kept at least until the conflict time + the setting of this device; old copies
         # are removed by a full sync (at most once a day), so it can stay a little longer
         until = info["ts"] + keep * 86400 if info["ts"] and keep else 0
-        info.update({"size": size, "left": max(0, left), "keep": keep,
+        info.update({"size": size, "left": max(0, left), "keep": keep, "state": is_state(info["sub"]),
                      "until": time.strftime("%d.%m %H:%M", time.localtime(until)) if until > now else "",
                      "here": os.path.exists(info.pop("local"))})
         out.append(info)
@@ -2497,12 +2783,12 @@ def conflict_sub(cid):
     return m.group(1) if m else cid
 
 
-def conflict_pictures(info, cid):
+def conflict_pictures(info, cid, where=None):
     """[(conflict id, local path)] of the pictures that lost the conflict together with
     this save (game.state -> game.state.png with the same device and time)."""
     tag = cid[len(info["sub"]) + 1:]
     folder, name = (info["sub"].rsplit("/", 1) + [""])[:2] if "/" in info["sub"] else ("", info["sub"])
-    rc, out = rclone(["lsjson", "--files-only", "--no-mimetype", CONFLICTS + ("/" + folder if folder else "")], check=False)
+    rc, out = rclone(["lsjson", "--files-only", "--no-mimetype", (where or CONFLICTS) + ("/" + folder if folder else "")], check=False)
     try:
         names = {i["Path"] for i in json.loads(out or "[]")} if rc == 0 else set()
     except (ValueError, KeyError, TypeError):
@@ -2515,9 +2801,12 @@ def conflict_pictures(info, cid):
     return found
 
 
-def restore_conflict(cid):
+def restore_conflict(cid, where=None):
     """The conflict copy becomes the save on this device again; the save it replaces goes to
-    the conflicts (it can be restored the same way). The next sync sends it everywhere."""
+    the conflicts (it can be restored the same way). The next sync sends it everywhere.
+    where=HISTORY: a previous version; the version here goes to the history by the sync
+    that sends the restored one (here only if it was not sent yet)."""
+    folder_of = where or CONFLICTS
     info = conflict_info(cid)
     if not info:
         print("bad id")
@@ -2532,15 +2821,15 @@ def restore_conflict(cid):
     stamp = (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") if now > SANE_TIME
              else "time-unknown-%d" % random.randint(0, 99999))
     backup_tag = None
-    if os.path.exists(info["local"]):
+    if os.path.exists(info["local"]) and (folder_of == CONFLICTS or unsent_here(info)):
         backup_tag = "%s.%s" % (version_device(info, info["local"]), stamp)
-    items = [(cid, info["local"])] + conflict_pictures(info, cid)
+    items = [(cid, info["local"])] + conflict_pictures(info, cid, folder_of)
     for n, (item, target) in enumerate(items):
         folder = os.path.dirname(target)
         os.makedirs(folder, exist_ok=True)
         tmp = os.path.join(folder, ".ss_tmp_restore_" + os.path.basename(target))
         try:
-            if rclone(["copyto", CONFLICTS + "/" + item, tmp], check=(n == 0))[0] != 0:
+            if rclone(["copyto", folder_of + "/" + item, tmp], check=(n == 0))[0] != 0:
                 continue                # a picture that could not be fetched: the save matters
             backup = None
             if backup_tag and os.path.exists(target):
@@ -2548,31 +2837,670 @@ def restore_conflict(cid):
                 # as its save, so it can be restored the same way
                 backup = "%s.%s" % (conflict_sub(item), backup_tag)
                 if backup != item:
-                    rclone(["copyto", target, CONFLICTS + "/" + backup])
+                    rclone(["copyto", target, folder_of + "/" + backup])
             os.replace(tmp, target)
             os.utime(target, None)      # newer than any other version: the next sync keeps it
         finally:
             if os.path.exists(tmp):
                 os.remove(tmp)
         if backup != item:
-            rclone(["deletefile", CONFLICTS + "/" + item], check=False)
-    log(t("restored", file=info["file"], dev=info["dev"], time=info["time"]))
+            rclone(["deletefile", folder_of + "/" + item], check=False)
+    log(t("restored" if folder_of == CONFLICTS else "restored_hist", file=info["file"], dev=info["dev"], time=info["time"]))
     print("ok")
     return 0
 
 
-def drop_conflict(cid):
+def drop_conflict(cid, where=None):
+    folder = where or CONFLICTS
     info = conflict_info(cid)
     if not info:
         print("bad id")
         return 2
-    pictures = conflict_pictures(info, cid)
-    rclone(["deletefile", CONFLICTS + "/" + cid])
+    pictures = conflict_pictures(info, cid, folder)
+    rclone(["deletefile", folder + "/" + cid])
     for item, _local in pictures:
-        rclone(["deletefile", CONFLICTS + "/" + item], check=False)
-    log(t("conflict_dropped", file=info["file"], dev=info["dev"], time=info["time"]))
+        rclone(["deletefile", folder + "/" + item], check=False)
+    log(t("conflict_dropped" if folder == CONFLICTS else "hist_dropped", file=info["file"], dev=info["dev"], time=info["time"]))
     print("ok")
     return 0
+
+
+USER_DEL_FILE = os.path.join(BASE_DIR, ".user_deleted.json")
+
+
+def delete_saves(rels):
+    """Saves of this device deleted from the web interface (a save state with its picture).
+    The sync that follows deletes them in the cloud and on the other devices; the version
+    in the cloud goes to the history first (if it is kept)."""
+    lock = open(ENGINE_LOCK, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("busy")
+        return 3
+    top = os.path.realpath(SAVE_DIR)
+    done = []
+    for rel in rels:
+        parts = (rel or "").split("/")
+        if len(parts) < 2 or any(p in ("", ".", "..") or p.startswith(".ss_tmp") for p in parts):
+            continue
+        p = os.path.join(SAVE_DIR, *parts)
+        if not os.path.realpath(p).startswith(top + os.sep):
+            continue
+        items = [(rel, p)] + ([(rel + e, p + e) for e in QUIET_EXT] if is_state(rel) else [])
+        for r, f in items:
+            if os.path.isfile(f) and not os.path.islink(f):
+                os.remove(f)
+                done.append(r)
+    if not done:
+        print("nothing")
+        return 4
+    active, ex_now = make_system_active(), excluded()
+    synced = [r for r in done if active(r.split("/")[0]) and r.split("/")[0] not in ex_now]
+    if synced:
+        save_json(USER_DEL_FILE, sorted(set(load_json(USER_DEL_FILE, []) or []) | set(synced)))
+    for r in done:
+        if not quiet_in_log(r):
+            log(t("deleted_web" if r in synced else "deleted_web_here", rel=r))
+    print("ok" if synced else "local")      # local: nothing for the sync to do
+    return 0
+
+
+# ================================================================== previous versions
+def stamp_time(stamp):
+    sm = STAMP_RE.search("." + (stamp or ""))
+    if not sm:
+        return None
+    y, mo, d, h, mi, se = (int(x) for x in sm.groups())
+    try:
+        return time.mktime((y, mo, d, h, mi, se, 0, 0, -1))
+    except (OverflowError, ValueError):
+        return None
+
+
+def clean_history(days, count, now):
+    """Removes previous versions older than HISTORY_KEEP_DAYS of this device and the ones
+    beyond the HISTORY_KEEP_COUNT newest of each file. A device that keeps none (0) does not
+    touch them: the versions made by other devices stay as long as those devices keep them."""
+    if days <= 0:
+        return True
+    groups = {}
+    for rel, (_size, mt) in cloud_list(HISTORY).items():
+        m = CONFLICT_RE.match(rel)
+        if not m:
+            continue
+        made = stamp_time(m.group(3)) or parse_time(mt)
+        groups.setdefault(m.group(1), []).append((made, rel))
+    limit = now - days * 86400
+    old = []
+    for items in groups.values():
+        items.sort(reverse=True)
+        old += [rel for i, (made, rel) in enumerate(items) if i >= count or made < limit]
+    if old:
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".list") as f:
+            f.write("\n".join(old) + "\n")
+        try:
+            rclone(["delete", HISTORY, "--files-from-raw", f.name], check=False)
+        finally:
+            os.remove(f.name)
+        rclone(["rmdirs", HISTORY], check=False)
+    return True
+
+
+def strip_save_ext(name):
+    """"Game.state1.png" -> "Game", "Game.srm" -> "Game"."""
+    m = re.match(r"^(.+)\.state(\d+|\.auto)?(\.png)?$", name, re.I)
+    if m:
+        return m.group(1)               # only the slot part: "Game (09.01.2015)].state" -> "Game (09.01.2015)]"
+    stem, ext = os.path.splitext(name)
+    return stem if stem and ext else name
+
+
+MAME_KINDS = {"hi", "nvram", "state", "cfg", "diff", "inp", "memcard", "sta", "nv"}
+
+
+def rom_stems(system):
+    """Names (without extension, lower case) of the games of a system on this device - the ROM
+    files and the game folders - or None when its saves are not named after the ROMs (an
+    emulator with its own saves folder)."""
+    if system in SAVE_DIR_ROMS and system not in SAVES_NAMED_BY_ROM:
+        return None
+    if system == "solarus":
+        # its saves folder is named by the quest itself (yarntown_saves), not after the file
+        return set(solarus_quests()) if os.path.isdir(os.path.join(ROMS_DIR, system)) else None
+    tops = [os.path.join(ROMS_DIR, d) for d in (system,) + SAVE_DIR_ROMS.get(system, ())]
+    tops = [t for t in tops if os.path.isdir(t)]
+    if not tops:
+        return None                     # where its games are is not known: not marked
+    out = set()
+    for top, (dp, dns, fns) in ((t, w) for t in tops for w in os.walk(t)):
+        depth = dp[len(top):].count(os.sep)
+        dns[:] = [d for d in dns if not d.startswith(".") and d.lower() not in NOT_ROMS_DIRS and not junk_dir(d)]
+        for d in dns:
+            out.add(rom_stem(d).lower())
+        if depth >= 2:
+            dns[:] = []
+        for fn in fns:
+            if not _not_a_game(fn):
+                out.add(rom_stem(fn).lower())
+    return out
+
+
+def save_game(rel):
+    """The game a save belongs to: (system, key). The key is the name of the game file
+    for most emulators (the same as the ROM), the game code for PSP and PS2."""
+    parts = rel.split("/")
+    low = [p.lower() for p in parts]
+    name = parts[-1]
+    if "ppsspp_state" in low:
+        key = re.split(r"[_.]", name)[0][:9]
+    elif "savedata" in low and low.index("savedata") + 1 < len(parts) - 1:
+        key = parts[low.index("savedata") + 1][:9]
+    elif "sstates" in low:
+        key = name.split(" (")[0].split(".")[0]
+    elif low[0].startswith("mame") and any(p in MAME_KINDS for p in low[1:-1]):
+        # mame/state/sf2/1.sta, mame/nvram/sf2/eeprom (a folder per game) or
+        # mame/mame2003-plus/hi/sf2.hi (a file per game)
+        i = [n for n, p in enumerate(low) if n and p in MAME_KINDS][0]
+        key = parts[i + 1] if i + 1 < len(parts) - 1 else strip_save_ext(name)
+    elif low[0] in ("doom", "prboom") and len(parts) == 3:
+        key = parts[1]                  # doom/<WAD>/prboom.cfg, prboom/<WAD>/prboom.cfg: the settings of that game
+    elif low[0] in ("quake2", "solarus") and len(parts) >= 3:
+        # a folder per game, the files inside have the same names in every game:
+        # quake2/baseq2/save/save0/game.ssv, quake2/baseq2/config.cfg; solarus/<quest>/save1.dat
+        key = parts[1]
+    elif "per_game" in low[1:-1]:
+        # 3DO (Opera): opera/per_game/<game>.<disc>.srm - the disc number is not in the game name
+        key = re.sub(r"[.]\d+$", "", strip_save_ext(name))
+    elif low[0] == "duckstation" and len(parts) == 2 and low[1].endswith(".sav"):
+        key = name.rsplit("_", 1)[0]
+    else:
+        key = strip_save_ext(name)
+        if key.lower().endswith(SAVE_ROM_EXT):
+            key = key[:key.rfind(".")]  # "Game.z64.eep" (mupen64plus): named after the whole ROM file
+    return parts[0], key
+
+
+# extensions of the ROM a save may still have after its own one is cut off
+SAVE_ROM_EXT = (".z64", ".n64", ".v64", ".ndd", ".zip", ".7z")
+
+
+def solarus_quests():
+    """{save folder of the quest (lower case): key of its file (rom_stem)}: a quest
+    keeps its saves in the folder named in its quest.dat (write_dir = "yarntown_saves"),
+    not after the file (yarntown-v1.0.6.solarus)."""
+    import zipfile
+    top = os.path.join(ROMS_DIR, "solarus")
+    out = {}
+    try:
+        names = os.listdir(top)
+    except OSError:
+        return out
+    for fn in names:
+        if not fn.lower().endswith(".solarus"):
+            continue
+        stem = rom_stem(fn).lower()
+        wd = None
+        try:
+            with zipfile.ZipFile(os.path.join(top, fn)) as z:
+                qd = [n for n in z.namelist() if n.lower().endswith("quest.dat") and n.count("/") <= 1]
+                if qd:
+                    text = z.read(sorted(qd, key=len)[0])[:65536].decode("utf-8", "replace")
+                    m = re.search(r'write_dir\s*=\s*"([^"]+)"', text)
+                    wd = m.group(1).strip() if m else None
+        except (OSError, zipfile.BadZipFile, KeyError, RuntimeError):
+            pass
+        out[(wd or os.path.splitext(fn)[0]).lower()] = stem     # stem: as gamelist.xml paths are keyed
+    return out
+
+
+def unsent_here(info):
+    """True when the save here was changed after the last sync (not in the cloud yet)."""
+    parts = info["sub"].split("/")
+    if parts[0] == PORTS_CLOUD:
+        root, rel = "ports/" + parts[1], "/".join(parts[2:])
+    else:
+        root, rel = "saves", info["sub"]
+    b = (load_json(BASE_FILE, {}).get("roots", {}).get(root) or {}).get(rel)
+    try:
+        return not b or md5(info["local"]) != b.get("h")
+    except OSError:
+        return False
+
+
+def list_history(system):
+    """Previous versions of the saves of one system (newest first)."""
+    if not re.match(r"^[A-Za-z0-9_.+ -]+$", system or "") or system.strip(".") == "":
+        return []
+    out = []
+    for rel, (size, mt) in cloud_list(HISTORY + "/" + system).items():
+        cid = system + "/" + rel
+        info = conflict_info(cid, mt)
+        if not info or quiet_in_log(info["sub"]):
+            continue
+        info["deleted"] = cid.endswith(".deleted")
+        info["size"] = size
+        info["state"] = is_state(info["sub"])
+        info["key"] = save_game(info["sub"])[1]
+        info["here"] = os.path.exists(info.pop("local"))
+        out.append(info)
+    out.sort(key=lambda x: (-x["ts"], x["file"]))
+    return out
+
+
+# ================================================================== "a game is open"
+def device_model():
+    for p in ("/proc/device-tree/model", "/sys/firmware/devicetree/base/model"):
+        try:
+            with open(p, "rb") as f:
+                v = f.read().replace(b"\0", b"").decode("utf-8", "replace").strip()
+            if v:
+                return v[:60]
+        except OSError:
+            pass
+    return ""
+
+
+def rom_stem(rom):
+    name = os.path.basename((rom or "").rstrip("/"))
+    stem, ext = os.path.splitext(name)
+    return stem if stem and ext and len(ext) <= 6 else name
+
+
+COVER_TAGS = ("thumbnail", "boxart", "image", "mix", "screenshot", "titleshot", "marquee", "wheel")
+COVER_EXT = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+
+
+def game_info(system):
+    """({rom file name without extension (lower case): game name},
+        {the same: {"dir": ROM folder, "path": cover inside it}}) from gamelist.xml of the
+    system (and the ROM folders of an emulator with its own saves folder)."""
+    import xml.etree.ElementTree as ET
+    names, covers = {}, {}
+    for d in (system,) + SAVE_DIR_ROMS.get(system, ()):
+        gl = os.path.join(ROMS_DIR, d, "gamelist.xml")
+        if not os.path.isfile(gl):
+            continue
+        top = os.path.join(ROMS_DIR, d).rstrip("/") + "/"
+        try:
+            for _ev, el in ET.iterparse(gl):
+                if el.tag != "game":
+                    continue
+                n = (el.findtext("name") or "").strip()
+                p = rom_stem(el.findtext("path") or "").lower()
+                if p and n and p not in names:
+                    names[p] = n[:120]
+                if p and p not in covers:
+                    for tag in COVER_TAGS:
+                        c = (el.findtext(tag) or "").strip()
+                        if c.startswith(top):
+                            c = c[len(top):]
+                        elif c.startswith("./"):
+                            c = c[2:]
+                        if c and not c.startswith("/") and ".." not in c.split("/") and c.lower().endswith(COVER_EXT):
+                            try:
+                                st = os.stat(os.path.join(top, c))
+                            except OSError:
+                                continue        # named in gamelist.xml, but not on the card
+                            # the version: a picture scraped again gets another link
+                            covers[p] = {"dir": d, "path": c, "v": "%x-%x" % (int(st.st_mtime), st.st_size)}
+                            break
+                el.clear()
+        except (ET.ParseError, OSError):
+            continue
+    if system == "solarus":
+        for wd, stem in solarus_quests().items():
+            if stem in names and wd not in names:
+                names[wd] = names[stem]
+            if stem in covers and wd not in covers:
+                covers[wd] = covers[stem]
+    return names, covers
+
+
+def game_names(system):
+    return game_info(system)[0]
+
+
+def mark_start(system, rom):
+    key = rom_stem(rom).lower()
+    if system == "solarus":             # the key of its saves: the quest's save folder
+        key = {v: k for k, v in solarus_quests().items()}.get(key, key)
+    own = {"dev": device_name(), "model": device_model(), "sys": system,
+           "key": (system + "/" + key).lower(), "t": int(time.time())}
+    own["name"] = game_names(system).get(key) or rom_stem(rom)
+    save_json(OWN_MARK, own)
+    try:
+        open(PLAYING_FLAG, "w").close()
+    except OSError:
+        pass
+    lock = open(ENGINE_LOCK, "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)     # after a sync that is still running
+    now_own = load_json(OWN_MARK, {}) or {}
+    if now_own.get("t") != own["t"] or now_own.get("ended"):
+        return 0                         # the game is already over
+    data = json.dumps(own, ensure_ascii=False).encode("utf-8")
+    try:
+        subprocess.run(rclone_cmd(["rcat", "%s/%s.json" % (PLAYING, own["dev"])]), input=data,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return 0
+
+
+def mark_end():
+    own = load_json(OWN_MARK, None)
+    if isinstance(own, dict):
+        own["ended"] = True
+        save_json(OWN_MARK, own)
+    try:
+        os.remove(PLAYING_FLAG)
+    except OSError:
+        pass
+    return 0
+
+
+def marks_after_sync(fast):
+    """After a sync: the own mark goes away (the game was closed - or the device was switched
+    off in a game and its saves are in the cloud now); a game closed here normally also
+    removes the marks of the same game on other devices (it was continued here). The marks
+    of the other devices are kept on the card for the warning and the web interface."""
+    own = load_json(OWN_MARK, None)
+    own = own if isinstance(own, dict) else None
+    running = bool(own) and not own.get("ended") and os.path.exists(PLAYING_FLAG)
+    if fast and not (own and not running):
+        return
+    me = device_name()
+    marks = []
+    for name in cloud_list(PLAYING):
+        if "/" in name or not name.endswith(".json"):
+            continue
+        if name == me + ".json":
+            if not running:
+                rclone(["deletefile", PLAYING + "/" + name], check=False)
+            continue
+        rc, out = rclone(["cat", PLAYING + "/" + name], check=False, timeout=60)
+        try:
+            m = json.loads(out) if rc == 0 else None
+        except ValueError:
+            m = None
+        if not isinstance(m, dict) or not m.get("key") or not m.get("dev"):
+            continue
+        if own and own.get("ended") and m.get("key") == own.get("key"):
+            rclone(["deletefile", PLAYING + "/" + name], check=False)
+            log(t("mark_cleared", game=m.get("name") or m["key"], dev=m["dev"]))
+            continue
+        marks.append({k: m.get(k) for k in ("dev", "model", "sys", "key", "name", "t")})
+    save_json(MARKS_CACHE, marks)
+    if own and not running:
+        try:
+            os.remove(OWN_MARK)
+        except OSError:
+            pass
+
+
+def mark_label(m):
+    dev = str(m.get("dev") or "")
+    return "%s (%s)" % (dev, m["model"]) if m.get("model") else dev
+
+
+# ================================================================== the newest version
+def vtuple(v):
+    return tuple(int(x) for x in re.findall(r"\d+", v or "")[:3])
+
+
+def fetch_latest():
+    """(version, page) of the latest release on GitHub, or None."""
+    body = None
+    try:
+        import urllib.request
+        req = urllib.request.Request(RELEASES_API, headers={"User-Agent": "save-sync",
+                                                            "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            body = r.read(200000).decode("utf-8", "replace")
+    except Exception:
+        try:
+            r = subprocess.run(["curl", "-s", "-m", "8", "-H", "User-Agent: save-sync", RELEASES_API],
+                               capture_output=True, timeout=15)
+            body = r.stdout.decode("utf-8", "replace") if r.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            body = None
+    try:
+        d = json.loads(body or "")
+        tag, url = str(d.get("tag_name") or ""), str(d.get("html_url") or "")
+        if vtuple(tag) and url.startswith("https://github.com/"):
+            return tag.lstrip("vV"), url
+    except (ValueError, AttributeError):
+        pass
+    return None
+
+
+# ================================================================== the other devices
+# Each device keeps a small record of itself in the cloud (GameSaves_savesync/devices/<name>.json):
+# its model, system, address of the web interface in the home network, when it was last on.
+# The web interface lists them, so one can go from one device to another without typing addresses.
+DEVICES = SERVICE + "/devices"
+DEVICES_CACHE = os.path.join(BASE_DIR, ".devices_cache.json")
+DEVICE_SENT = os.path.join(BASE_DIR, ".device_sent.json")
+
+
+def lan_ip():
+    """The address of this device in the home network ("" when not known)."""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("10.254.254.254", 1))       # nothing is sent: only the route is chosen
+            ip = s.getsockname()[0]
+        finally:
+            s.close()
+        if ip and not ip.startswith(("127.", "0.")):
+            return ip
+    except OSError:
+        pass
+    try:
+        out = subprocess.run(["ip", "-4", "addr", "show"], capture_output=True, text=True, timeout=10).stdout
+        for ip in re.findall(r"inet\s+(\d+\.\d+\.\d+\.\d+)", out):
+            if not ip.startswith("127."):
+                return ip
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ""
+
+
+def devices_announce(port, system, force=False):
+    """Writes the record of this device to the cloud: when something in it changed, and every
+    15 minutes while the device is on - its time is when the device was last seen."""
+    ip = lan_ip()
+    if not ip:
+        return 1
+    rec = {"name": device_name(), "model": device_model(), "system": (system or "")[:80], "ip": ip,
+           "port": int(port), "v": SS_VERSION, "t": int(time.time())}
+    prev = load_json(DEVICE_SENT, {}) or {}
+    same = all(prev.get(k) == rec[k] for k in ("name", "model", "system", "ip", "port", "v"))
+    if same and not force and rec["t"] - int(prev.get("t") or 0) < 14 * 60:
+        print("same")
+        return 0
+    data = json.dumps(rec, ensure_ascii=False).encode("utf-8")
+    r = subprocess.run(rclone_cmd(["rcat", "%s/%s.json" % (DEVICES, rec["name"])]), input=data,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+    if r.returncode != 0:
+        return 1
+    save_json(DEVICE_SENT, rec)
+    print("sent")
+    return 0
+
+
+def devices_list():
+    """The records of all devices from the cloud (an old one stays until it is removed by hand)."""
+    own = device_name()
+    tmpd = tempfile.mkdtemp(prefix=".ss_tmp_devices", dir=BASE_DIR if os.path.isdir(BASE_DIR) else None)
+    try:
+        rc, _ = rclone(["copy", DEVICES, tmpd, "--include", "*.json"], check=False, timeout=300)
+        if rc not in (0, 3):
+            return None
+        out = []
+        for fn in sorted(os.listdir(tmpd)):
+            if not fn.endswith(".json"):
+                continue
+            d = load_json(os.path.join(tmpd, fn), None)
+            if not isinstance(d, dict) or not d.get("name"):
+                continue
+            name = str(d["name"])
+            out.append({"name": name[:60], "model": str(d.get("model") or "")[:60], "system": str(d.get("system") or "")[:80],
+                        "ip": str(d.get("ip") or "")[:40], "port": int(d.get("port") or 8080), "v": str(d.get("v") or "")[:12],
+                        "t": int(float(d.get("t") or 0))})
+        return out
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+
+def devices_forget(name):
+    if not re.match(r"^[A-Za-z0-9_.-]{1,60}$", name or "") or name == device_name():
+        return 2
+    rclone(["deletefile", "%s/%s.json" % (DEVICES, name)], check=False, timeout=60)
+    c = load_json(DEVICES_CACHE, {}) or {}
+    c["list"] = [d for d in c.get("list") or [] if d.get("name") != name]
+    save_json(DEVICES_CACHE, c)
+    return 0
+
+
+def devices_cli(argv):
+    sub = argv[1] if len(argv) > 1 else ""
+    if sub == "announce" and len(argv) > 2:
+        return devices_announce(argv[2], " ".join(a for a in argv[3:] if a != "--force"), "--force" in argv)
+    if sub == "list":
+        lst = devices_list()
+        if lst is None:
+            return 1
+        c = {"t": int(time.time()), "self": device_name(), "list": lst}
+        save_json(DEVICES_CACHE, c)
+        print(json.dumps(c, ensure_ascii=False))
+        return 0
+    if sub == "forget" and len(argv) > 2:
+        return devices_forget(argv[2])
+    return 2
+
+
+def update_check(force=False):
+    """The latest release, asked at most once in 20 hours (once an hour after a failure).
+    UPDATE_CHECK="false": not asked at all."""
+    out = {"current": SS_VERSION, "latest": "", "url": "", "newer": False,
+           "on": conf("UPDATE_CHECK", "true").lower() != "false"}
+    if not out["on"]:
+        return out
+    data = load_json(UPDATE_FILE, {}) or {}
+    now = time.time()
+    if force or (now - data.get("t", 0) > 20 * 3600 and now - data.get("tried", 0) > 3600):
+        got = fetch_latest()
+        if got:
+            data = {"t": now, "latest": got[0], "url": got[1]}
+        else:
+            data["tried"] = now
+        try:
+            save_json(UPDATE_FILE, data)
+        except OSError:
+            pass
+    out["latest"], out["url"] = data.get("latest", ""), data.get("url", "")
+    out["newer"] = bool(out["latest"]) and vtuple(out["latest"]) > vtuple(SS_VERSION)
+    return out
+
+
+# ================================================================== saves by game
+def games_list():
+    """Saves of this device by system and game: what is in the cloud, what waits to be sent,
+    what is newer in the cloud (by the last sync), who made the latest version; the marks of
+    games not closed on other devices. Local data only - no cloud requests."""
+    base = (load_json(BASE_FILE, {}).get("roots") or {}).get("saves", {})
+    root = [r for r in roots() if r.name == "saves"][0]
+    L = local_list(root, base)
+    M = {}
+    c = load_json(mcache_path(root), None)
+    if isinstance(c, dict) and c.get("root") == root.name and c.get("remote") == root.remote:
+        try:
+            M = json.loads(c.get("m") or "{}").get("files") or {}
+        except (ValueError, AttributeError):
+            M = {}
+    marks = load_json(MARKS_CACHE, []) or []
+    rank = {"ok": 0, "cloud": 1, "newer": 2, "pending": 3}
+    systems = {}
+    # saves here of the systems not synced on this device (no games of them here)
+    off, excl = {}, {}
+    ex_now = excluded()
+    if os.path.isdir(SAVE_DIR):
+        any_acc = saves_accept(ex_now, any_system=True)
+        all_acc = saves_accept(set(), any_system=True)     # the excluded systems too
+        for dp, dns, fns in os.walk(SAVE_DIR):
+            dns[:] = [d for d in dns if not os.path.islink(os.path.join(dp, d))]
+            for fn in fns:
+                full = os.path.join(dp, fn)
+                rel = os.path.relpath(full, SAVE_DIR).replace(os.sep, "/")
+                if "/" not in rel or rel in L or os.path.islink(full) or quiet_in_log(rel):
+                    continue
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                if any_acc(rel, st.st_size) and not root.accept(rel, st.st_size):
+                    off[rel] = {"s": st.st_size, "m": int(st.st_mtime)}
+                elif rel.split("/")[0] in ex_now and all_acc(rel, st.st_size):
+                    excl[rel] = {"s": st.st_size, "m": int(st.st_mtime)}
+    for rel, o in list(off.items()) + list(excl.items()):
+        sysname, key = save_game(rel)
+        g = systems.setdefault(sysname, {}).setdefault(key.lower(), {
+            "key": key, "saves": 0, "states": 0, "status": "off" if rel in off else "excl", "dev": "", "t": 0, "size": 0, "files": {}})
+        g["files"][rel] = {"dev": "", "time": time.strftime("%d.%m %H:%M", time.localtime(o["m"])),
+                           "size": o["s"], "here": True, "state": is_state(rel)}
+        g["states" if is_state(rel) else "saves"] += 1
+        g["size"] += o["s"]
+    off_sys = {save_game(r)[0] for r in off}
+    excl_sys = {save_game(r)[0] for r in excl}
+    for rel in set(L) | {r for r in M if r not in base and root.accept(r, (M[r] or {}).get("s"))}:
+        if quiet_in_log(rel) or "/" not in rel:
+            continue
+        sysname, key = save_game(rel)
+        l, b, m = L.get(rel), base.get(rel), M.get(rel) or {}
+        if l is None:
+            st = "cloud"                    # new in the cloud: comes with the next sync
+        elif not b or l["h"] != b.get("h"):
+            st = "pending"
+        elif m.get("h") and m["h"] != b.get("h"):
+            st = "newer"
+        else:
+            st = "ok"
+        g = systems.setdefault(sysname, {}).setdefault(key.lower(), {
+            "key": key, "saves": 0, "states": 0, "status": "ok", "dev": "", "t": 0, "size": 0, "files": {}})
+        # the version of each file now (for "now -> restore")
+        g["files"][rel] = {"dev": "" if st == "pending" or not re.match(r"^[A-Za-z0-9_-]+$", str(m.get("d") or "")) else m["d"],
+                           "time": time.strftime("%d.%m %H:%M", time.localtime(l["m"] if l else (m.get("t") or 0))) if (l or m.get("t")) else "",
+                           "size": (l or {}).get("s") if l else m.get("s"), "here": l is not None,
+                           "state": is_state(rel)}
+        g["states" if is_state(rel) else "saves"] += 1
+        g["size"] += (l or {}).get("s") or m.get("s") or 0
+        if rank[st] > rank[g["status"]]:
+            g["status"] = st
+        if m.get("t") and m["t"] > g["t"] and re.match(r"^[A-Za-z0-9_-]+$", str(m.get("d") or "")):
+            g["t"], g["dev"] = m["t"], m["d"]
+    out = []
+    for sysname in sorted(systems, key=str.lower):
+        names, covers = game_info(sysname)
+        stems = None if sysname in off_sys or sysname in excl_sys else rom_stems(sysname)     # not synced here
+        games = []
+        for k, g in systems[sysname].items():
+            g["name"] = names.get(k) or g["key"]
+            # is the game itself here? Not known for saves named by a game code (PSP, PS2...)
+            g["rom"] = (None if stems is None else True if k in stems
+                        else None if re.match(r"^[A-Za-z]{4}[-_]?\d{3,5}", g["key"]) else False)
+            g["img"] = covers.get(k)
+            g["time"] = time.strftime("%d.%m %H:%M", time.localtime(g["t"])) if g["t"] else ""
+            g["open"] = [{"dev": mark_label(m), "time": time.strftime("%d.%m %H:%M", time.localtime(m.get("t") or 0))}
+                         for m in marks if str(m.get("key") or "") == (sysname + "/" + k).lower()]
+            games.append(g)
+        games.sort(key=lambda x: (x["rom"] is False, x["name"].lower()))     # games not here go last
+        out.append({"sys": sysname, "games": games, "off": sysname in off_sys, "excluded": sysname in excl_sys})
+    other = [{"dev": mark_label(m), "sys": m.get("sys") or "", "name": m.get("name") or m.get("key") or "",
+              "key": m.get("key") or "", "time": time.strftime("%d.%m %H:%M", time.localtime(m.get("t") or 0))}
+             for m in marks]
+    return {"systems": out, "marks": other, "hist_days": hist_days(), "hist_count": hist_count()}
 
 
 def timing_line(total):
@@ -2629,6 +3557,71 @@ def main(argv):
         except (SyncError, OSError, subprocess.SubprocessError) as e:
             sys.stderr.write("%s\n" % e)
             return 1
+    if argv and argv[0] in ("hdrop", "delsave"):
+        try:
+            if len(argv) < 2:
+                return 2
+            return drop_conflict(argv[1], HISTORY) if argv[0] == "hdrop" else delete_saves(argv[1:])
+        except (SyncError, OSError, subprocess.SubprocessError) as e:
+            sys.stderr.write("%s\n" % e)
+            return 1
+    if argv and argv[0] in ("history", "hrestore", "games"):
+        try:
+            if argv[0] == "games":
+                print(json.dumps(games_list(), ensure_ascii=False))
+                return 0
+            if len(argv) < 2:
+                return 2
+            if argv[0] == "history":
+                print(json.dumps(list_history(argv[1]), ensure_ascii=False))
+                return 0
+            return restore_conflict(argv[1], HISTORY)
+        except (SyncError, OSError, subprocess.SubprocessError) as e:
+            sys.stderr.write("%s\n" % e)
+            return 1
+    if argv and argv[0] == "mark":
+        # game start / end (the game hook); "notes": warnings for the screen
+        try:
+            if len(argv) > 3 and argv[1] == "start":
+                return mark_start(argv[2], argv[3])
+            if len(argv) > 1 and argv[1] == "sync":
+                # a game closed with no saves changed (no sync then): its mark still goes away
+                marks_after_sync(True)
+                return 0
+            if len(argv) > 1 and argv[1] == "end":
+                return mark_end()
+            if len(argv) > 1 and argv[1] == "notes":
+                seen = set()
+                for m in load_json(MARKS_CACHE, []) or []:
+                    # short for the screen: the model of the device when known, else its name
+                    who = m.get("model") or m.get("dev")
+                    if who and who not in seen:
+                        seen.add(who)
+                        print(t("mark_note", dev=who, game=m.get("name") or m.get("key")))
+                return 0
+        except (SyncError, OSError, ValueError, subprocess.SubprocessError) as e:
+            sys.stderr.write("%s\n" % e)
+            return 1
+        return 2
+    if argv and argv[0] == "cleanup":
+        try:
+            return run_cleanup(argv[1:])
+        except (SyncError, OSError, subprocess.SubprocessError):
+            return 1
+    if argv and argv[0] == "devices":
+        try:
+            return devices_cli(argv)
+        except (SyncError, OSError, ValueError, subprocess.SubprocessError) as e:
+            sys.stderr.write("%s\n" % e)
+            return 1
+    if argv and argv[0] == "version-check":
+        res = update_check("--force" in argv)
+        if "--note" in argv:
+            if res["newer"]:
+                print(t("update_note", v=res["latest"]))
+        else:
+            print(json.dumps(res))
+        return 0
     if argv and argv[0] == "check":
         try:
             return 0 if unchanged_here() else 1
@@ -2916,7 +3909,7 @@ fi
 # Устройство и облако сравниваются с последней синхронизацией: скачивается
 # только изменённое в облаке, отправляется только изменённое здесь. Если
 # сохранение изменили на разных устройствах, остаётся более новое, а старое
-# копируется в папку _conflicts (срок - настройка «Копии при конфликтах»). Ничего не спрашивается.
+# копируется в папку GameSaves_savesync/conflicts (срок - настройка «Копии при конфликтах»). Ничего не спрашивается.
 T_ENG=\$(cut -d. -f1 /proc/uptime 2>/dev/null || date +%s)
 progress_start "download" "Загрузка сохранений"
 ENGINE_ARGS=(sync)
@@ -2953,6 +3946,15 @@ if [ \$ENGINE_EXIT -eq 0 ]; then
         esac
     fi
     progress_finish true "download" "Загрузка сохранений завершена"
+    # once per boot, after the first good sync: games left open on other devices, a new version
+    if [ ! -f /tmp/save_sync_boot_notes ]; then
+        : > /tmp/save_sync_boot_notes
+        python3 "\$ENGINE_SCRIPT" mark notes 2>/dev/null | while IFS= read -r NOTE_LINE; do
+            [ -n "\$NOTE_LINE" ] && notify_screen "\$NOTE_LINE"
+        done
+        NOTE_LINE=\$(python3 "\$ENGINE_SCRIPT" version-check --note 2>/dev/null)
+        [ -n "\$NOTE_LINE" ] && notify_screen "\$NOTE_LINE"
+    fi
     exit 0
 fi
 save_status "ERROR"
@@ -3019,6 +4021,16 @@ PROGRESS_FILE="/tmp/save_sync_progress.json"
 PROGRESS_LOG="/tmp/save_sync_progress.log"
 WEB_PROGRESS=false
 
+# the game hook: a game started / ended on this device (the mark in the cloud)
+if [ "\$1" = "--mark-start" ]; then
+    SS_RCLONE="\$RCLONE_PATH" python3 "\$ENGINE_SCRIPT" mark start "\$2" "\$3" >/dev/null 2>&1
+    exit 0
+fi
+if [ "\$1" = "--mark-end" ]; then
+    python3 "\$ENGINE_SCRIPT" mark end >/dev/null 2>&1
+    exit 0
+fi
+
 if [ -f "\$CONFIG_FILE" ]; then
     . "\$CONFIG_FILE"
 fi
@@ -3058,6 +4070,12 @@ elif [ "\$1" = "--web-progress" ]; then
     SHOW_PROGRESS=""
     FORCE_SYNC=true
     WEB_PROGRESS=true
+elif [ "\$1" = "--web-quick" ]; then
+    # after a deletion in the web interface: what changed is known, no full listing of the cloud
+    SHOW_PROGRESS=""
+    FORCE_SYNC=true
+    WEB_PROGRESS=true
+    WEB_QUICK=1
 elif [ "\$1" = "--verbose" ]; then
     SHOW_PROGRESS="yes"
     FORCE_SYNC=true
@@ -3171,6 +4189,8 @@ fi
 if [ -n "\$FAST_SYNC" ] && [ "\$SYNC_MODE" = "economy" ]; then
     if SS_EXCLUDED="\$EXCLUDED_SYSTEMS" python3 "\$ENGINE_SCRIPT" check >/dev/null 2>&1; then
         echo "\$(date '+%d.%m %H:%M:%S') Синхронизация (нет изменений) - облако не запрашивалось" >> "\$LOG_FILE" 2>/dev/null
+        # the game is closed: its "still playing" mark in the cloud is removed even without a sync
+        SS_RCLONE="\$RCLONE_PATH" timeout 120 python3 "\$ENGINE_SCRIPT" mark sync >/dev/null 2>&1
         exit 0
     else
         LOCAL_CHANGED=1
@@ -3187,6 +4207,9 @@ if [ "\$FORCE_SYNC" != "true" ] && [ -z "\$SHOW_PROGRESS" ] && [ \$SYNC_INTERVAL
         state_set PENDING_UPLOAD 1
         exit 0
     fi
+fi
+if [ -n "\$WEB_QUICK" ] && [ -z "\$(state_get PENDING_UPLOAD)" ]; then
+    FAST_SYNC=1
 fi
 
 # Автоматическая выгрузка после игры: показываем, что она началась, а если она затянулась -
@@ -3247,7 +4270,7 @@ fi
 # Устройство и облако сравниваются с последней синхронизацией: скачивается
 # только изменённое в облаке, отправляется только изменённое здесь. Если
 # сохранение изменили на разных устройствах, остаётся более новое, а старое
-# копируется в папку _conflicts (срок - настройка «Копии при конфликтах»). Ничего не спрашивается.
+# копируется в папку GameSaves_savesync/conflicts (срок - настройка «Копии при конфликтах»). Ничего не спрашивается.
 T_ENG=\$(cut -d. -f1 /proc/uptime 2>/dev/null || date +%s)
 progress_start "upload" "Выгрузка сохранений"
 ENGINE_ARGS=(sync)
@@ -3327,9 +4350,25 @@ create_hook_script() {
 LOG_FILE="$LOG_FILE"
 
 echo "\$(date '+%d.%m %H:%M:%S') Выход из игры" >> "\$LOG_FILE" 2>/dev/null
+bash "$UPLOAD_SCRIPT" --mark-end >/dev/null 2>&1
 bash "$UPLOAD_SCRIPT" --detach &
 ENDOFSCRIPT
         chmod +x "$USERSCRIPTS_DIR/save-sync[endgame].sh" 2>/dev/null
+
+        # game start: the mark "a game is open on this device" (system and game from the state file)
+        cat > "$USERSCRIPTS_DIR/save-sync[rungame].sh" << ENDOFSCRIPT
+#!/bin/sh
+SF=/tmp/es_state.inf
+prev=""
+for a in "\$@"; do [ "\$prev" = "-statefile" ] && SF="\$a"; prev="\$a"; done
+SYS=\$(grep -m1 '^SystemId=' "\$SF" 2>/dev/null | cut -d= -f2- | tr -d '\r')
+ROM=\$(grep -m1 '^GamePath=' "\$SF" 2>/dev/null | cut -d= -f2- | tr -d '\r')
+if [ -n "\$SYS" ] && [ -n "\$ROM" ]; then
+    bash "$UPLOAD_SCRIPT" --mark-start "\$SYS" "\$ROM" >/dev/null 2>&1 &
+fi
+exit 0
+ENDOFSCRIPT
+        chmod +x "$USERSCRIPTS_DIR/save-sync[rungame].sh" 2>/dev/null
     else
         mkdir -p "$SCRIPT_DIR" 2>/dev/null
         cat > "$SCRIPT_DIR/save-sync.sh" << ENDOFSCRIPT
@@ -3343,8 +4382,13 @@ log_hook() {
 }
 
 case "\$1" in
+    gameStart)
+        # the mark "a game is open on this device" (in the background: the game does not wait)
+        bash "$UPLOAD_SCRIPT" --mark-start "\$2" "\$5" >/dev/null 2>&1 &
+        ;;
     gameStop)
         log_hook "Выход из игры"
+        bash "$UPLOAD_SCRIPT" --mark-end >/dev/null 2>&1
         bash "$UPLOAD_SCRIPT" --detach &
         ;;
 esac
@@ -3886,6 +4930,7 @@ MSG = {
         "phase": "Downloading from link",
         "svc_yandex": "Yandex Disk", "svc_pcloud": "pCloud", "svc_nextcloud": "Nextcloud",
         "svc_archive": "archive.org", "svc_direct": "Direct link",
+        "svc_ss_cloud": "ROMs in the cloud", "svc_ss_device": "ROMs on this device",
         "direct_page": "❌ The link opens a web page, not a file. Paste a direct link to the file (for example, copied from the download button) or a Yandex Disk, pCloud, Nextcloud or archive.org link.",
         "direct_denied": "❌ The server did not give the file: the link has expired or needs a login. Copy the download link again.",
         "restricted": "❌ This archive.org item is restricted: it can only be downloaded after logging in on archive.org.",
@@ -3995,6 +5040,7 @@ MSG = {
         "phase": "Загрузка по ссылке",
         "svc_yandex": "Яндекс.Диск", "svc_pcloud": "pCloud", "svc_nextcloud": "Nextcloud",
         "svc_archive": "archive.org", "svc_direct": "Прямая ссылка",
+        "svc_ss_cloud": "Ромы в облаке", "svc_ss_device": "Ромы на устройстве",
         "direct_page": "❌ По ссылке открывается страница, а не файл. Вставьте прямую ссылку на файл (например, скопированную с кнопки скачивания) или ссылку Яндекс.Диска, pCloud, Nextcloud, archive.org.",
         "direct_denied": "❌ Сервер не отдал файл: ссылка истекла или нужен вход. Скопируйте ссылку на скачивание заново.",
         "restricted": "❌ Этот архив на archive.org закрыт: скачать его можно только после входа на archive.org.",
@@ -4075,6 +5121,17 @@ def log(msg):
             f.write("%s %s\n" % (datetime.now().strftime("%d.%m %H:%M:%S"), msg))
     except OSError:
         pass
+
+
+def log_debug(msg):
+    """Only with the detailed log (LOG_LEVEL="debug"): timings and the like."""
+    try:
+        with open(CONFIG_FILE) as f:
+            if not re.search(r'^LOG_LEVEL="debug"', f.read(), re.M):
+                return
+    except OSError:
+        return
+    log(msg)
 
 
 # ---- console output during a download
@@ -4173,6 +5230,8 @@ def open_url(url, headers=None, method="GET", data=None, timeout=TIMEOUT):
     HTTPError with a non-retryable status is raised immediately."""
     hdrs = {"User-Agent": USER_AGENT}
     hdrs.update(headers or {})
+    if url.startswith("rclone:"):
+        return RcloneResponse(url[len("rclone:"):], hdrs.get("Range"))
     last = None
     # quick (catalog pictures): short wait and one retry, only after a dropped connection
     quick = getattr(_NET, "quick", False)
@@ -4945,11 +6004,198 @@ class DirectSource:
         return entry.ref or self.url, {}
 
 
+class RcloneResponse:
+    """A file in the cloud read with 'rclone cat' like an HTTP response (Range: bytes=a-b)."""
+
+    def __init__(self, remote_path, rng=None):
+        rb = rclone_bin()
+        if rb is None:
+            raise LinkError(t("cloud_unavailable"))
+        args = [rb, "--config", RCLONE_CONF, "cat", remote_path]
+        self.status, self.headers = 200, {}
+        m = re.match(r"bytes=(\d+)-(\d*)$", (rng or "").strip())
+        if m:
+            start = int(m.group(1))
+            args += ["--offset", str(start)]
+            if m.group(2):
+                args += ["--count", str(int(m.group(2)) - start + 1)]
+            self.status = 206
+        self.url = "rclone:" + remote_path
+        self.proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        _LIVE_PROCS.add(self.proc)
+
+    def read(self, n=-1):
+        data = self.proc.stdout.read() if n is None or n < 0 else self.proc.stdout.read(n)
+        if not data and self.proc.wait() != 0:
+            raise LinkError(t("net_error", err="rclone cat"))
+        return data
+
+    def geturl(self):
+        return self.url
+
+    def close(self):
+        if self.proc.poll() is None:
+            self.proc.kill()
+        self.proc.wait()
+        _LIVE_PROCS.discard(self.proc)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.close()
+
+
+# The cloud folder is served over HTTP on this device while a catalog of it is open in the
+# web interface (one rclone for all its pictures instead of one per picture); stopped after
+# 10 minutes without use. Downloads read with "rclone cat" (another process).
+_SERVE = {"proc": None, "base": None, "used": 0.0}
+_SERVE_LOCK = threading.Lock()
+SERVE_PID = "/tmp/save_sync_serve.pid"
+SERVE_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".mp4", ".m4v", ".webm")
+
+
+def rclone_serve_base():
+    rb = rclone_bin()
+    if rb is None:
+        return None
+    with _SERVE_LOCK:
+        _SERVE["used"] = time.time()
+        p = _SERVE["proc"]
+        if p is not None and p.poll() is None:
+            return _SERVE["base"]
+        try:                            # one left by a web interface that was killed
+            with open(SERVE_PID) as f:
+                old = int(f.read().strip() or 0)
+            with open("/proc/%d/cmdline" % old, "rb") as f:
+                if b"serve" in f.read():
+                    os.kill(old, signal.SIGTERM)
+        except (OSError, ValueError):
+            pass
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        p = subprocess.Popen([rb, "--config", RCLONE_CONF, "serve", "http", REMOTE_ROMS, "--read-only",
+                              "--addr", "127.0.0.1:%d" % port, "--dir-cache-time", "10s"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        base = "http://127.0.0.1:%d/" % port
+        for _ in range(50):
+            if p.poll() is not None:
+                return None
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                    break
+            except OSError:
+                time.sleep(0.2)
+        else:
+            p.kill()
+            return None
+        try:
+            with open(SERVE_PID, "w") as f:
+                f.write(str(p.pid))
+        except OSError:
+            pass
+        _SERVE.update(proc=p, base=base)
+
+        def idle():
+            while True:
+                time.sleep(30)
+                with _SERVE_LOCK:
+                    if _SERVE["proc"] is not p:
+                        return
+                    if time.time() - _SERVE["used"] > 600 or p.poll() is not None:
+                        if p.poll() is None:
+                            p.terminate()
+                        _SERVE.update(proc=None, base=None)
+                        return
+        threading.Thread(target=idle, daemon=True).start()
+        return base
+
+
+class SaveSyncSource:
+    """savesync://cloud/<system> - GameROMs/<system> in the cloud; savesync://device/<system> -
+    roms/<system> on this device. other_side(): {path: size} of the same system on the other
+    side (for the marks "on this device" / "in the cloud" and "updated")."""
+    direct = False
+
+    def __init__(self, url, password=None):
+        u = urllib.parse.urlsplit(url.strip())
+        self.side = u.netloc
+        self.system = urllib.parse.unquote(u.path.strip("/"))
+        if self.side not in ("cloud", "device") or not self.system or "/" in self.system or self.system in (".", ".."):
+            raise LinkError(t("not_found"))
+        self.title = t("svc_ss_cloud" if self.side == "cloud" else "svc_ss_device")
+        self.local = os.path.join(ROMS_DIR, self.system)
+        self.remote = REMOTE_ROMS.rstrip("/") + "/" + self.system
+        self.serve = None               # http base of rclone serve (the web interface)
+        self._other = None
+
+    def _cloud_files(self):
+        rc, out, _err = rclone(["lsjson", "-R", "--files-only", "--no-mimetype", self.remote], timeout=600)
+        if rc == 3:
+            return {}                   # no such folder: no ROMs of it in the cloud (or no GameROMs at all)
+        if rc != 0:
+            raise LinkError(t("cloud_unavailable"))
+        try:
+            return {e["Path"]: e.get("Size") for e in json.loads(out or "[]")}
+        except (ValueError, KeyError, TypeError):
+            return {}
+
+    def _local_files(self):
+        out = {}
+        for dp, dns, fns in os.walk(self.local):
+            dns[:] = [d for d in dns if not d.startswith(".")]
+            for fn in fns:
+                full = os.path.join(dp, fn)
+                if fn.startswith(".") or os.path.islink(full):
+                    continue
+                try:
+                    out[os.path.relpath(full, self.local).replace(os.sep, "/")] = os.path.getsize(full)
+                except OSError:
+                    pass
+        return out
+
+    def other_side(self):
+        if self._other is None:
+            self._other = self._local_files() if self.side == "cloud" else self._cloud_files()
+        return self._other
+
+    def load(self, scan):
+        self._other = None
+        files = self._cloud_files() if self.side == "cloud" else self._local_files()
+        root = Entry(self.system, True, ref="")
+        dirs = {"": root}
+
+        def folder(rel):
+            if rel not in dirs:
+                parent, _, name = rel.rpartition("/")
+                d = Entry(name, True, ref=rel)
+                folder(parent).children.append(d)
+                dirs[rel] = d
+            return dirs[rel]
+        for rel in sorted(files):
+            parent, _, name = rel.rpartition("/")
+            folder(parent).children.append(Entry(name, False, files[rel], rel))
+            scan.add()
+        return root
+
+    def download_request(self, entry):
+        if self.side == "device":
+            return "file://" + urllib.request.pathname2url(os.path.join(self.local, *entry.ref.split("/"))), {}
+        # pictures and videos through rclone serve; gamelist.xml (it changes) read as it is now
+        if self.serve and entry.name.lower().endswith(SERVE_EXT):
+            return self.serve + urllib.parse.quote(self.system + "/" + entry.ref), {}
+        return "rclone:" + self.remote + "/" + entry.ref, {}
+
+
 SOURCES = (YandexSource, PCloudSource, NextcloudSource, ArchiveSource, DirectSource)
 
 
 def make_source(url, password=None):
     u = urllib.parse.urlsplit(url.strip())
+    if u.scheme == "savesync":
+        return SaveSyncSource(url, password)
     if u.scheme not in ("http", "https"):
         return None
     for cls in SOURCES:
@@ -6131,10 +7377,63 @@ def cat_open(src, root, rel):
     start = find_entry(root, rel, src) if rel.strip("/") else root
     if start is None:
         raise LinkError(t("not_found"))
+    if isinstance(src, SaveSyncSource) and start.is_dir and not cat_gamelist(start):
+        merged = cat_open_subs(src, start)
+        if merged is not None:
+            return start, merged
     base = cat_find_dir(start, src)
     if base is None:
         raise LinkError(t("cat_no_gamelist"))
     return base, cat_parse(cat_read(src, cat_gamelist(base)[0], 64 * 1024 * 1024))
+
+
+def cat_sub_path(sub, text):
+    """A gamelist path of the subfolder sub, relative to the system folder."""
+    text = (text or "").strip()
+    if not text or text.startswith("/"):
+        return text
+    return "./" + sub + "/" + cat_norm(text)
+
+
+def cat_open_subs(src, start):
+    """A system folder without its own gamelist.xml whose subfolders have one each
+    (Recalbox "ports": a folder per game, each a system of its own): the gamelists are
+    joined into one, the paths made relative to the system folder. Each entry keeps the
+    name of its subfolder (ss_sub) so that a new entry goes back to that gamelist."""
+    subs = [c for c in sorted_children(start)
+            if c.is_dir and c.name.lower() not in CAT_SKIP_DIRS and not c.name.startswith(".") and cat_gamelist(c)]
+    if not subs:
+        return None
+    out = ET.Element("gameList")
+    for sub in subs:
+        try:
+            xml_root = cat_parse(cat_read(src, cat_gamelist(sub)[0], 64 * 1024 * 1024))
+        except LinkError:
+            continue
+        for node in xml_root:
+            if node.tag not in ("game", "folder"):
+                continue
+            for c in node:
+                if c.tag == "path" or c.tag in CAT_MEDIA_TAGS or (c.text or "").strip().startswith("./"):
+                    c.text = cat_sub_path(sub.name, c.text)
+            node.set("ss_sub", sub.name)
+            out.append(node)
+    return out
+
+
+def cat_split_subs(nodes):
+    """{subfolder ("" = the system folder): its entries, paths relative to it again}."""
+    groups = {}
+    for node in nodes:
+        sub = node.attrib.pop("ss_sub", "") or ""
+        if sub:
+            pre = sub + "/"
+            for c in node:
+                v = cat_norm(c.text) if (c.text or "").strip() and not (c.text or "").strip().startswith("/") else None
+                if v is not None and (c.tag == "path" or c.tag in CAT_MEDIA_TAGS) and v.startswith(pre):
+                    c.text = "./" + v[len(pre):]
+        groups.setdefault(sub, []).append(node)
+    return groups
 
 
 def cat_base_path(base):
@@ -6194,7 +7493,9 @@ def catalog_json(src, root, rel):
 
 
 def cat_listing(src, base, xml_root):
-    system = cat_system_guess(base)
+    other = src.other_side() if isinstance(src, SaveSyncSource) else None
+    changed = []
+    system = src.system if isinstance(src, SaveSyncSource) else cat_system_guess(base)
     sys_dir = os.path.join(ROMS_DIR, system) if system else None
     games, kinds = [], {}
     for node in xml_root:
@@ -6224,11 +7525,26 @@ def cat_listing(src, base, xml_root):
         year = (node.findtext("releasedate") or "").strip()[:4]
         if year.isdigit():
             g["year"] = year
-        if sys_dir and os.path.exists(os.path.join(sys_dir, *rel_rom.split("/"))):
+        if other is not None:
+            key = (base.rel + "/" + rel_rom).lstrip("/")
+            if rom.is_dir:
+                there = [k for k in other if k.startswith(key + "/")]
+                if there:
+                    g["have"] = True
+            elif key in other:
+                if other[key] == rom.size:
+                    g["have"] = True
+                else:
+                    changed.append(rel_rom)     # there, but another version
+        elif sys_dir and os.path.exists(os.path.join(sys_dir, *rel_rom.split("/"))):
             g["have"] = True
         games.append(g)
-    return {"service": src.title, "dir": cat_base_path(base), "title": base.name,
-            "system": system, "games": games, "kinds": kinds}
+    res = {"service": src.title, "dir": cat_base_path(base), "title": base.name,
+           "system": system, "games": games, "kinds": kinds}
+    if other is not None:
+        res["seen"] = {"new": [], "changed": changed}
+        res["side"] = src.side
+    return res
 
 
 def cat_list_refs(src, base, entry):
@@ -6271,10 +7587,21 @@ def cat_list_refs(src, base, entry):
     return out
 
 
-def cat_device_media(system_dir):
-    """{rom path: set of media tags whose file exists} of roms/<system>/gamelist.xml."""
+def cat_device_media(system_dir, sub=""):
+    """{rom path: set of media tags whose file exists} of roms/<system>/gamelist.xml (or,
+    without one, of the gamelists of its subfolders, paths relative to the system)."""
     out = {}
     p = os.path.join(system_dir, "gamelist.xml")
+    if not sub and not os.path.isfile(p):
+        try:
+            names = sorted(os.listdir(system_dir))
+        except OSError:
+            names = []
+        for name in names:
+            d = os.path.join(system_dir, name)
+            if os.path.isdir(d) and name.lower() not in CAT_SKIP_DIRS and os.path.isfile(os.path.join(d, "gamelist.xml")):
+                out.update({name + "/" + k: v for k, v in cat_device_media(d, name).items()})
+        return out
     try:
         with open(p, "rb") as f:
             root = cat_parse(f.read())
@@ -6350,6 +7677,8 @@ def cat_plan(src, base, xml_root, game_paths, kinds, keep=None):
         p = ET.Element("path")
         p.text = "./" + rel_rom
         new.insert(0, p)
+        if node.get("ss_sub"):
+            new.set("ss_sub", node.get("ss_sub"))
         nodes.append(new)
         picked.append(rel_rom)
     # folder entries (name, picture) of the folders the chosen games are in
@@ -6366,6 +7695,8 @@ def cat_plan(src, base, xml_root, game_paths, kinds, keep=None):
         p = ET.Element("path")
         p.text = "./" + rel_d
         new.insert(0, p)
+        if node.get("ss_sub"):
+            new.set("ss_sub", node.get("ss_sub"))
         nodes.append(new)
     return plan, nodes
 
@@ -6377,6 +7708,10 @@ def cat_merge(system_dir, nodes, exists_fn=None, path=None, replace_media=False,
     Returns how many games were added or completed."""
     if not nodes:
         return 0
+    if path is None and any(n.get("ss_sub") for n in nodes):
+        return sum(cat_merge(os.path.join(system_dir, sub) if sub else system_dir, ns, exists_fn=exists_fn,
+                             replace_media=replace_media, replace_desc=replace_desc)
+                   for sub, ns in cat_split_subs(nodes).items())
     path = path or os.path.join(system_dir, "gamelist.xml")
     if os.path.isfile(path):
         with open(path, "rb") as f:
@@ -6456,7 +7791,7 @@ class CatalogSession:
             t0 = time.time()
             self.src, self.root = load_tree(self.url, password=self.password, quiet=True)
             # how long the service took: slow answers are usually the service's, not ours
-            log(t("list_time", service=self.src.title, s="%.1f" % (time.time() - t0), n=self.root.files))
+            log_debug(t("list_time", service=self.src.title, s="%.1f" % (time.time() - t0), n=self.root.files))
         return self.root
 
     def listing(self):
@@ -6484,7 +7819,11 @@ class CatalogSession:
     def catalog(self, rel=""):
         with self.lock:
             self.used = time.time()
+            if isinstance(self.src, SaveSyncSource):
+                self.root, self.bases = None, {}       # own ROMs: what is there now
             root = self._tree()
+            if isinstance(self.src, SaveSyncSource) and self.src.side == "cloud":
+                self.src.serve = rclone_serve_base()
             base, xml_root = cat_open(self.src, root, rel)
             self.bases[cat_base_path(base)] = base
             return cat_listing(self.src, base, xml_root)
@@ -6529,6 +7868,8 @@ class CatalogSession:
             _NET.quick = False
 
     def media(self, folder, rel, limit=CAT_PREVIEW_MAX, unlocked=True):
+        if isinstance(self.src, SaveSyncSource) and self.src.side == "cloud" and self.src.serve:
+            self.src.serve = rclone_serve_base()       # kept running while the catalog is used
         _NET.quick = True
         try:
             return self._media(folder, rel, limit, unlocked)
@@ -6637,23 +7978,31 @@ def cat_merge_cloud(dest, nodes, replace_media=False, replace_desc=False):
         except (ValueError, KeyError, TypeError):
             have = set()
 
-    def exists(rel):
-        return rel in have or any(h.startswith(rel + "/") for h in have)
-    tmpd = tempfile.mkdtemp(prefix="ss_gamelist_")
-    try:
-        local = os.path.join(tmpd, "gamelist.xml")
-        if "gamelist.xml" in have:
-            rc, _o, err = rclone(["copyto", dest.remote + "/gamelist.xml", local], timeout=300)
-            if rc != 0:
-                raise LinkError(_last_line(err) or "rclone %d" % rc)
-        n = cat_merge(tmpd, nodes, exists_fn=exists, path=local, replace_media=replace_media, replace_desc=replace_desc)
-        if n:
-            rc, _o, err = rclone(["copyto", local, dest.remote + "/gamelist.xml"], timeout=300)
-            if rc != 0:
-                raise LinkError(_last_line(err) or "rclone %d" % rc)
-        return n
-    finally:
-        shutil.rmtree(tmpd, ignore_errors=True)
+    total = 0
+    # the entries of a subfolder (Recalbox "ports") go to that subfolder's gamelist
+    for sub, group in cat_split_subs(nodes).items():
+        pre = sub + "/" if sub else ""
+
+        def exists(rel, pre=pre):
+            rel = pre + rel
+            return rel in have or any(h.startswith(rel + "/") for h in have)
+        tmpd = tempfile.mkdtemp(prefix="ss_gamelist_")
+        try:
+            local = os.path.join(tmpd, "gamelist.xml")
+            remote = dest.remote + "/" + pre + "gamelist.xml"
+            if pre + "gamelist.xml" in have:
+                rc, _o, err = rclone(["copyto", remote, local], timeout=300)
+                if rc != 0:
+                    raise LinkError(_last_line(err) or "rclone %d" % rc)
+            n = cat_merge(tmpd, group, exists_fn=exists, path=local, replace_media=replace_media, replace_desc=replace_desc)
+            if n:
+                rc, _o, err = rclone(["copyto", local, remote], timeout=300)
+                if rc != 0:
+                    raise LinkError(_last_line(err) or "rclone %d" % rc)
+            total += n
+        finally:
+            shutil.rmtree(tmpd, ignore_errors=True)
+    return total
 
 
 def merge_cloud_gamelists():
@@ -8287,11 +9636,12 @@ show_control_panel() {
         echo ""
         echo "══════════════════════════════════════════════════════════" 
         echo ""
-        echo "           Save Sync - Центр управления v1.5.0"
+        echo "           Save Sync - Центр управления v1.6.0"
         echo "" 
         echo "══════════════════════════════════════════════════════════"
         echo ""
-        echo " 🖥️ Система:        $SYSTEM (${CFW_VERSION:-неизвестно})"
+        CFW_SHORT=${CFW_VERSION%% *}; case "$CFW_SHORT" in неизвестно|unknown|Unknown) CFW_SHORT="" ;; esac
+        echo " 🖥️ Система:        $SYSTEM${CFW_SHORT:+ $CFW_SHORT}"     # as short as in the web header: "Batocera 43.1"
         echo " 💾 Сохранений:     $SAVES_STATUS"
         echo " ☁️ $(cloud_header_label)$CLOUD_STATUS"
         echo " 📦 Свободно:       $FREE (локально) / $CLOUD_FREE (облако)"
@@ -8326,25 +9676,28 @@ show_control_panel() {
         echo "  7 - 🔄 Количество попыток (сейчас: $REAL_RETRIES)"
         echo "  8 - 🗂️ Копии при конфликтах (сейчас: $(keep_days_label))"
         echo "  9 - 🎮 Синхронизация (сейчас: $(sync_mode_label))"
+        echo " 10 - 💾 Быстрые сохранения (сейчас: $(states_label))"
+        echo " 11 - 🕘 Прежние версии (сейчас: $(hist_label))"
         echo ""
         
         echo " ── ИНФОРМАЦИЯ ──"
-        echo " 10 - 📊 Статистика и логи"
-        echo " 11 - 🔍 Полная диагностика"
+        echo " 12 - 📊 Статистика и логи"
+        echo " 13 - 🔍 Полная диагностика"
         echo ""
         
         echo " ── СИСТЕМА ──"
-        echo " 12 - 🔔 Уведомления на экране (сейчас: $(notify_label))"
-        echo " 13 - 🗑️ Очистить временные файлы"
-        echo " 14 - 🔄 Перезагрузить устройство"
-        echo " 15 - 🌐 Перезапустить веб-интерфейс"
-        echo " 16 - ☁️ Сменить облако"
+        echo " 14 - 🔔 Уведомления на экране (сейчас: $(notify_label))"
+        echo " 15 - 🗑️ Очистить временные файлы"
+        echo " 16 - 🔄 Перезагрузить устройство"
+        echo " 17 - 🌐 Перезапустить веб-интерфейс"
+        echo " 18 - ☁️ Сменить облако"
+        echo " 19 - 🆕 Новые версии Save Sync (сейчас: $(update_label))"
         echo ""
         echo "──────────────────────────────────────────────────────────"
         echo "  0 - 🚪 Выход"
         echo "══════════════════════════════════════════════════════════"
         echo ""
-        read -p "Выберите действие (0-16): " choice
+        read -p "Выберите действие (0-19): " choice
         
         case $choice in
             1) 
@@ -8447,12 +9800,12 @@ show_control_panel() {
                         echo "✅ Полная синхронизация завершена!"
                     else
                         echo ""
-                        echo "❌ Выгрузка не удалась. Подробности: пункт 10 (Статистика и логи)."
+                        echo "❌ Выгрузка не удалась. Подробности: пункт 12 (Статистика и логи)."
                     fi
                 else
                     echo ""
                     echo "❌ Загрузка не удалась - выгрузка не выполнялась."
-                    echo "   Подробности: пункт 10 (Статистика и логи)."
+                    echo "   Подробности: пункт 12 (Статистика и логи)."
                 fi
                 echo ""
                 pause
@@ -8531,10 +9884,13 @@ show_control_panel() {
                 echo ""
                 echo "Сейчас: $(keep_days_label)"
                 echo ""
-                echo "Если одно и то же сохранение изменили на разных устройствах,"
-                echo "остаётся самая новая версия. Более старую можно хранить в облаке"
-                echo "(папка GameSaves_conflicts) и вернуть в веб-интерфейсе (Сохранения)."
-                echo "При «Не хранить» устройство не делает копий и не удаляет чужие."
+                echo "Копии сохранений, изменённых на разных устройствах: остаётся"
+                echo "самая новая версия, а более старая хранится в облаке"
+                echo "(GameSaves_savesync/conflicts) выбранное время - вернуть её"
+                echo "можно в веб-интерфейсе, вкладка «Сохранения»."
+                echo "«Не хранить»: это устройство не делает копий и не удаляет"
+                echo "копии других устройств."
+                echo ""
                 echo "Сколько дней хранить такие копии?"
                 echo " 1 - Не хранить"
                 echo " 2 - 1 день"
@@ -8557,12 +9913,114 @@ show_control_panel() {
                 echo ""
                 pause
                 ;;
-            12)
+            11)
+                echo ""
+                echo "Сейчас: $(hist_label)"
+                echo ""
+                echo "Перед тем как сохранение в облаке заменится или удалится,"
+                echo "его прежняя версия переносится в GameSaves_savesync/history."
+                echo "Вернуть её можно в веб-интерфейсе: вкладка «Сохранения»,"
+                echo "страница игры. «Не хранить»: это устройство не делает"
+                echo "копий и не удаляет копии других устройств."
+                echo ""
+                echo "Сколько дней хранить прежние версии?"
+                echo " 1 - Не хранить"
+                echo " 2 - 1 день"
+                echo " 3 - 3 дня"
+                echo " 4 - 7 дней (по умолчанию)"
+                echo " 5 - 30 дней"
+                echo ""
+                read -p "Выберите (1-5): " hist_choice
+                case "$hist_choice" in
+                    1) NEW_HD=0 ;;
+                    2) NEW_HD=1 ;;
+                    3) NEW_HD=3 ;;
+                    4) NEW_HD=7 ;;
+                    5) NEW_HD=30 ;;
+                    *) echo "❌ Неверный выбор"; pause; continue ;;
+                esac
+                NEW_HC="${HISTORY_KEEP_COUNT:-3}"
+                if [ "$NEW_HD" != "0" ]; then
+                    echo ""
+                    echo "Сколько прежних версий каждого файла хранить?"
+                    echo "Лишние удаляются, даже если срок ещё не вышел."
+                    echo " 1 - 1"
+                    echo " 2 - 3 (по умолчанию)"
+                    echo " 3 - 5"
+                    echo " 4 - 10"
+                    echo ""
+                    read -p "Выберите (1-4): " hcount_choice
+                    case "$hcount_choice" in
+                        1) NEW_HC=1 ;;
+                        2) NEW_HC=3 ;;
+                        3) NEW_HC=5 ;;
+                        4) NEW_HC=10 ;;
+                        *) echo "❌ Неверный выбор"; pause; continue ;;
+                    esac
+                fi
+                HISTORY_KEEP_DAYS="$NEW_HD"
+                HISTORY_KEEP_COUNT="$NEW_HC"
+                save_config
+                echo ""
+                echo "✅ Прежние версии: $(hist_label)"
+                echo ""
+                pause
+                ;;
+            19)
+                echo ""
+                echo "Сейчас: $(update_label)"
+                echo ""
+                echo "Проверка на GitHub раз в день: вышла ли новая версия"
+                echo "Save Sync. Если вышла - уведомление на экране после"
+                echo "синхронизации при включении и строка вверху веб-интерфейса."
+                echo "Обновление - как обычно, вручную."
+                echo ""
+                echo " 1 - Сообщать (по умолчанию)"
+                echo " 2 - Не сообщать"
+                echo ""
+                read -p "Выберите (1-2): " upd_choice
+                case "$upd_choice" in
+                    1) UPDATE_CHECK="true" ;;
+                    2) UPDATE_CHECK="false" ;;
+                    *) echo "❌ Неверный выбор"; pause; continue ;;
+                esac
+                save_config
+                echo ""
+                echo "✅ Новые версии: $(update_label)"
+                echo ""
+                pause
+                ;;
+            10)
+                echo ""
+                echo "Сейчас: $(states_label)"
+                echo ""
+                echo "Синхронизация быстрых сохранений (save states)."
+                echo "«Не синхронизировать»: это устройство их не отправляет"
+                echo "и не скачивает, уже отправленные остаются в облаке."
+                echo "Обычные сохранения синхронизируются всегда."
+                echo ""
+                echo " 1 - Синхронизировать (по умолчанию)"
+                echo " 2 - Не синхронизировать"
+                echo ""
+                read -p "Выберите (1-2): " states_choice
+                case "$states_choice" in
+                    1) SYNC_STATES="true" ;;
+                    2) SYNC_STATES="false" ;;
+                    *) echo "❌ Неверный выбор"; pause; continue ;;
+                esac
+                save_config
+                echo ""
+                echo "✅ Быстрые сохранения: $(states_label)"
+                echo ""
+                pause
+                ;;
+            14)
                 echo ""
                 echo "Сейчас: $(notify_label)"
                 echo ""
-                echo "Короткие уведомления о синхронизации"
-                echo "и загрузках. Работает на Batocera и KNULLI."
+                echo "Короткие уведомления на экране: синхронизация"
+                echo "и загрузки, незакрытые игры на других устройствах,"
+                echo "новая версия Save Sync. Работает на Batocera и KNULLI."
                 echo ""
                 echo " 1 - Включить"
                 echo " 2 - Выключить"
@@ -8618,16 +10076,16 @@ show_control_panel() {
                 echo ""
                 pause
                 ;;
-            10)
+            12)
                 show_statistics
                 ;;
-            11)
+            13)
                 echo ""
                 bash "$0" --info
                 echo ""
                 pause
                 ;;
-            13)
+            15)
                 echo ""
                 echo " 🗑️  Очистка временных файлов"
                 echo ""
@@ -8674,7 +10132,7 @@ show_control_panel() {
                 echo ""
                 pause
                 ;;
-            14)
+            16)
                 echo ""
                 echo "⚠️ ВНИМАНИЕ!"
                 echo "Устройство будет перезагружено."
@@ -8691,7 +10149,7 @@ show_control_panel() {
                 echo ""
                 pause
                 ;;
-            15)
+            17)
                 echo ""
                 echo "🔄 Перезапуск веб-интерфейса..."
                 STOPPED=false
@@ -8708,13 +10166,13 @@ show_control_panel() {
                 fi
                 sleep 2
                 # Запускаем новый
-                bash "$0" --web &
+                web_detached
                 echo "✅ Веб-интерфейс перезапущен"
                 echo "🌐 Откройте: http://$IP_ADDR:8080"
                 echo ""
                 pause
                 ;;
-            16)
+            18)
                 echo ""
                 echo "Сейчас: $(cloud_label "$RCLONE_CONF")"
                 echo ""
@@ -8884,14 +10342,14 @@ restart_web_after_update() {
         pkill -f "python3.*server.py" 2>/dev/null
     fi
     sleep 2
-    bash "$0" --web > /dev/null 2>&1 &
+    web_detached
     echo "✅ Веб-интерфейс запущен"
 }
 
 start_web() {
     echo ""
     echo "══════════════════════════════════════════════════════════"
-    echo " 🌐 Save Sync - Веб-интерфейс v1.5.0"
+    echo " 🌐 Save Sync - Веб-интерфейс v1.6.0"
     echo "══════════════════════════════════════════════════════════"
     echo ""
     
@@ -8948,6 +10406,8 @@ from datetime import datetime
 import re
 import shutil
 import sys
+import hashlib
+import gzip
 
 PORT = 8080
 BASE = "__SS_BASE__"
@@ -8975,6 +10435,62 @@ CLOUD_CHECK_LOCK = threading.Lock()
 CLOUD_ABOUT_CACHE = {}              # last known cloud volume (free / used / total)
 CLOUD_ABOUT_LOCK = threading.Lock()
 
+
+
+CLOUD_STATE = {"res": None, "t": 0.0, "running": False}
+CLOUD_STATE_LOCK = threading.Lock()
+
+
+def cloud_state():
+    """The state of the cloud for the status card - what is known now, never waited for:
+    {"status", "slow"?, "free", "used", "total"} or None before the first check. Checked
+    again in the background when older than 8 s."""
+    with CLOUD_STATE_LOCK:
+        res = CLOUD_STATE["res"]
+        if not CLOUD_STATE["running"] and time.time() - CLOUD_STATE["t"] >= 8:
+            CLOUD_STATE["running"] = True
+            threading.Thread(target=_cloud_state_check, daemon=True).start()
+    return res
+
+
+def _cloud_state_check():
+    out = {"status": "disconnected"}
+    try:
+        connected, took = cloud_check()
+        if connected:
+            out["status"] = "connected"
+            if took > 3:
+                out["slow"] = int(round(took))
+            # the volume at most once a minute; if it fails, the last known values
+            with CLOUD_ABOUT_LOCK:
+                cached = CLOUD_ABOUT_CACHE.get("vals")
+                fresh = cached and time.time() - CLOUD_ABOUT_CACHE.get("t", 0) < 60
+            vals = cached or {}
+            if not fresh:
+                try:
+                    about = subprocess.run([sys.executable or "python3", os.path.join(BASE, "sync_engine.py"), "about"],
+                                           env=dict(os.environ, SS_RCLONE=RCLONE_PATH), capture_output=True, text=True, timeout=20)
+                    got = {}
+                    if about.returncode == 0:
+                        for line in about.stdout.split("\n"):
+                            if "Total:" in line:
+                                got["total"] = line.split(":", 1)[1].strip()
+                            elif "Used:" in line:
+                                got["used"] = line.split(":", 1)[1].strip()
+                            elif "Free:" in line:
+                                got["free"] = line.split(":", 1)[1].strip()
+                    if got:
+                        with CLOUD_ABOUT_LOCK:
+                            CLOUD_ABOUT_CACHE["vals"] = got
+                            CLOUD_ABOUT_CACHE["t"] = time.time()
+                        vals = got
+                except Exception:
+                    pass
+            out.update(vals)
+    except Exception:
+        pass
+    with CLOUD_STATE_LOCK:
+        CLOUD_STATE.update(res=out, t=time.time(), running=False)
 
 
 def cloud_check():
@@ -9132,24 +10648,217 @@ MEDIA_DIRS_ALL = {"images", "media", "videos", "manuals", "bezels", "covers", "b
                   "titlescreens", "wheel", "boxart", "snaps", "downloaded_images", "downloaded_videos",
                   "downloaded_media", "__macosx", "@eadir", "#recycle", "$recycle.bin", "system volume information"}
 NOT_GAME_EXT = (".xml", ".txt", ".dat", ".log", ".cache", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".mp4",
-                ".avi", ".mkv", ".webm", ".pdf", ".nfo", ".md", ".db", ".tmp", ".bak", ".crdownload", ".partial")
+                ".avi", ".mkv", ".webm", ".pdf", ".nfo", ".md", ".db", ".tmp", ".bak", ".crdownload", ".partial",
+                ".cfg", ".ini", ".disabled")
+# BIOS archives put next to the games (arcade cores look for them there): not games
+BIOS_SETS = {"neogeo", "neocdz", "naomi", "naomi2", "naomigd", "awbios", "hod2bios", "f355bios", "f355dlx", "airlbios",
+               "pgm", "skns", "isgsm", "hng64", "cpzn1", "cpzn2", "decocass", "nmk004", "ym2608", "qsound", "stvbios",
+               "coleco", "msx", "spectrum", "channelf", "konamigx", "taitofx1", "tps", "atarisy1", "megaplay", "megatech",
+               "playch10", "sys573", "bubsys", "acpsx", "cchip", "galaxian", "segasp", "triforce", "chihiro"}
+
+
+def is_bios(name):
+    stem, ext = os.path.splitext(name.lower())
+    return ext in (".zip", ".7z") and stem in BIOS_SETS
 NOT_GAME_NAMES = {".ds_store", "thumbs.db", "desktop.ini", ".keep", ".gitkeep", ".localized"}
 
 
-def system_has_games(path, system):
+# The extensions of the games of every system, from EmulationStation's es_systems.cfg
+# (Batocera, KNULLI, old Recalbox), Recalbox's systemlist.xml and the user's own
+# es_systems_*.cfg. A system not found there is counted by the rule below.
+ES_SYSTEMS_FILES = ["/usr/share/emulationstation/es_systems.cfg",
+                    "/recalbox/share_init/system/.emulationstation/es_systems.cfg",
+                    "/recalbox/share_init/system/.emulationstation/systemlist.xml"]
+ES_SYSTEMS_USER_DIRS = ["/userdata/system/configs/emulationstation", "/recalbox/share/system/.emulationstation"]
+_ES_EXT = {"key": None, "map": {}}
+
+
+def es_extensions():
+    """{"names": {system: spec}, "paths": {folder under roms: spec}}; spec: {"ext": (...)}
+    or {"files": text} (Recalbox "files:c3.exe": the game is a set of known files).
+    Read again when a file changes."""
+    paths = [p for p in ES_SYSTEMS_FILES if os.path.isfile(p)]
+    for d in ES_SYSTEMS_USER_DIRS:
+        try:
+            paths += sorted(os.path.join(d, f) for f in os.listdir(d)
+                            if (f.startswith("es_systems") and f.endswith(".cfg")) or f == "systemlist.xml")
+        except OSError:
+            pass
+    key = []
+    for p in paths:
+        try:
+            st = os.stat(p)
+            key.append((p, st.st_size, st.st_mtime))
+        except OSError:
+            pass
+    if key == _ES_EXT["key"]:
+        return _ES_EXT["map"]
+    import xml.etree.ElementTree as ET
+    names, folders = {}, {}
+    for p, _size, _mt in key:            # the user's files come last: they win
+        try:
+            root = ET.parse(p).getroot()
+        except (ET.ParseError, OSError):
+            continue
+        for node in root.iter("system"):
+            # es_systems.cfg: <name>, <extension>, <path>; systemlist.xml (Recalbox): name="",
+            # <descriptor path="%ROOT%/nes" extensions=".nes .zip! .7z!"> ("!": an archive
+            # with the game inside)
+            desc = node.find("descriptor")
+            name = (node.findtext("name") or node.get("name") or "").strip().lower()
+            text = (node.findtext("extension") or (desc.get("extensions") if desc is not None else "") or "").strip()
+            if text.lower().startswith("files:"):
+                spec = {"files": text[6:].strip().lower()}
+            else:
+                exts = tuple(sorted({e.lower().rstrip("!") for e in text.split() if e.startswith(".")}))
+                spec = {"ext": exts} if exts else None
+            if not spec:
+                continue
+            # the folder of the system under roms ("ports/Doom" on Recalbox); usually the name
+            path = (node.findtext("path") or (desc.get("path") if desc is not None else "") or "").strip().rstrip("/")
+            rel = ""
+            if "%ROOT%/" in path:
+                rel = path.split("%ROOT%/", 1)[1]
+            elif "/roms/" in path:
+                rel = path.rsplit("/roms/", 1)[1]
+            rel = rel.strip("/").lower()
+            if name:
+                names[name] = spec
+            if rel:
+                folders[rel] = spec
+                if "/" not in rel:
+                    names[rel] = spec
+    out = {"names": names, "paths": folders}
+    _ES_EXT.update(key=key, map=out)
+    return out
+
+
+def es_spec(system, rel_dir):
+    """(key, spec) for a folder (system/sub/...): the nearest folder described on its own
+    (Recalbox ports/Doom), else the system; spec None: not known."""
+    m = es_extensions()
+    parts = rel_dir.lower().strip("/").split("/")
+    for i in range(len(parts), 1, -1):
+        k = "/".join(parts[:i])
+        if k in m["paths"]:
+            return k, m["paths"][k]
+    s = system.lower()
+    return s, m["paths"].get(s) or m["names"].get(s)
+
+
+def files_match(files, text):
+    """A "files:" game is there: one of its files is in the folder."""
+    toks = [x for x in text.split() if "." in x]
+    for f in files:
+        f = f.lower()
+        if (len(f) >= 3 and f in text) or any(f == x or f.endswith(x) for x in toks):
+            return True
+    return False
+
+
+def count_in_dir(files, system, spec=False):
+    """Games among the file names of one folder: a disc set (.cue with its .bin tracks,
+    .m3u with its discs) counted once; scraped media and leftovers are not games. When
+    es_systems.cfg (systemlist.xml) gives the extensions, only files with them count."""
+    n = 0
+    if spec is False:
+        spec = es_spec(system, system)[1]
+    exts = spec.get("ext") if spec else None
+    low = [f.lower() for f in files]
+    lists = [os.path.splitext(f)[0] for f in low if f.endswith(".m3u")]
+    sheets = [os.path.splitext(f)[0] for f in low if f.endswith((".cue", ".gdi", ".ccd", ".toc"))]
+    for f in low:
+        if f in NOT_GAME_NAMES or f.startswith("._") or is_bios(f):
+            continue
+        if exts:
+            if not f.endswith(exts):
+                continue            # a file of a game (its data, a manual, a picture), not a game
+        elif f.endswith(NOT_GAME_EXT) or ".xml." in f:
+            continue                # gamelist.xml.old and the like are not games either
+        elif f.endswith(".png") and system != "pico8":
+            continue
+        stem, ext = os.path.splitext(f)
+        if ext in (".bin", ".img", ".sub", ".raw", ".wav", ".iso") and any(stem.startswith(c) for c in sheets):
+            continue                # a track of a .cue / .gdi
+        if ext != ".m3u" and lists and any(stem.startswith(m) for m in lists):
+            continue                # a disc listed by an .m3u
+        n += 1
+    return n
+
+
+def count_groups(groups):
+    """Games in [(system, folder system/sub/..., file names)]: each folder by the rule of
+    the nearest described folder; a "files:" game counts once however its files lie."""
+    n, seen = 0, set()
+    for system, rel_dir, files in groups:
+        key, spec = es_spec(system, rel_dir)
+        if spec and "files" in spec:
+            if key not in seen and files_match(files, spec["files"]):
+                seen.add(key)
+                n += 1
+            continue
+        n += count_in_dir(files, system, spec)
+    return n
+
+
+def count_games(path, system):
+    """About how many games are in roms/<system> (3 folder levels deep)."""
+    groups = []
+    top = path.rstrip(os.sep)
     for root, dirs, files in os.walk(path):
         dirs[:] = [x for x in dirs if not x.startswith(".") and x.lower() not in MEDIA_DIRS_ALL]
-        for f in files:
-            low = f.lower()
-            if low.endswith(NOT_GAME_EXT) or low in NOT_GAME_NAMES or low.startswith("._"):
-                continue
-            if low.endswith(".png") and system != "pico8":
-                continue
+        if root[len(top):].count(os.sep) >= 3:
+            dirs[:] = []
+        sub = root[len(top):].strip(os.sep)
+        groups.append((system, system + ("/" + sub.replace(os.sep, "/") if sub else ""), files))
+    return count_groups(groups)
+
+
+def count_cloud_games(paths):
+    """{system: games} from the paths of the cloud files (system/sub/.../file) by the same
+    rule as on the device: the same folders skipped, the same depth."""
+    by_dir = {}
+    for rel in paths:
+        parts = rel.split("/")
+        if len(parts) < 2 or len(parts) > 5:
+            continue
+        sub = parts[1:-1]
+        if any(x.startswith(".") or x.lower() in MEDIA_DIRS_ALL for x in sub):
+            continue
+        by_dir.setdefault((parts[0], "/".join(parts[:-1])), []).append(parts[-1])
+    groups = {}
+    for (sysname, rel_dir), files in by_dir.items():
+        groups.setdefault(sysname, []).append((sysname, rel_dir, files))
+    return {sysname: count_groups(g) for sysname, g in groups.items()}
+
+
+def system_has_games(path, system):
+    """A system folder with at least one game, by the same rule as count_games (the
+    extensions from es_systems.cfg / systemlist.xml when known): a folder with only media,
+    leftovers or the files of a game that is gone (pygame without its .pygame) is not shown."""
+    top = path.rstrip(os.sep)
+    seen = set()
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [x for x in dirs if not x.startswith(".") and x.lower() not in MEDIA_DIRS_ALL]
+        if root[len(top):].count(os.sep) >= 3:
+            dirs[:] = []
+        if not files:
+            continue
+        sub = root[len(top):].strip(os.sep)
+        rel_dir = system + ("/" + sub.replace(os.sep, "/") if sub else "")
+        key, spec = es_spec(system, rel_dir)
+        if spec and "files" in spec:
+            if key not in seen and files_match(files, spec["files"]):
+                return True
+            continue
+        if count_in_dir(files, system, spec):
             return True
     return False
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    _upd = None          # the latest version as the engine knows it (see update_info)
+    _upd_t = 0.0
     def request_allowed(self, change):
         """Commands (POST) are taken only from the page of the web interface itself:
         a browser adds Origin to requests sent by other sites, and a page cannot fake it.
@@ -9169,17 +10878,52 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
     
+    def _gzip_ok(self):
+        return "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+
     def send_json(self, data, status=200):
+        body = json.dumps(data, ensure_ascii=False).encode()
+        packed = len(body) > 2048 and self._gzip_ok()
+        if packed:
+            body = gzip.compress(body, 5)       # lists of games: several times smaller over Wi-Fi
         self.send_response(status)
         self.send_header("Content-type", "application/json")
+        if packed:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(json.dumps(data, ensure_ascii=False).encode())
-    
+        self.wfile.write(body)
+
+    _page = {}
+
     def send_html(self, content):
+        """The page: compressed, and kept by the browser - it asks with the version it has and
+        gets a short "not changed" until Save Sync is updated."""
+        got = self._page.get(id(content))
+        if got is None:
+            raw = content.encode()
+            got = (raw, gzip.compress(raw, 6), '"%s"' % hashlib.sha1(raw).hexdigest()[:16])
+            type(self)._page = {id(content): got}
+        raw, packed, tag = got
+        if self.headers.get("If-None-Match") == tag:
+            self.send_response(304)
+            self.send_header("ETag", tag)
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            return
+        gz = self._gzip_ok()
+        body = packed if gz else raw
         self.send_response(200)
         self.send_header("Content-type", "text/html; charset=utf-8")
+        if gz:
+            self.send_header("Content-Encoding", "gzip")
+        self.send_header("Vary", "Accept-Encoding")
+        self.send_header("ETag", tag)
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(content.encode())
+        self.wfile.write(body)
     
     def read_config(self):
         config = {}
@@ -9201,8 +10945,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # числа только цифрами, переключатели только true/false, в тексте
             # нет символов, которые выходят за пределы кавычек
             int_def = {"SYNC_INTERVAL": 0, "MAX_RETRIES": 3, "CONFLICT_KEEP_DAYS": 3,
-                       "MIN_FREE_KB": 51200, "MAX_LOG_SIZE": 102400}
-            bool_def = {"NOTIFICATIONS": "true", "SKIP_UNCHANGED": "true",
+                       "MIN_FREE_KB": 51200, "MAX_LOG_SIZE": 102400,
+                       "HISTORY_KEEP_DAYS": 7, "HISTORY_KEEP_COUNT": 3}
+            bool_def = {"NOTIFICATIONS": "true", "SYNC_STATES": "true", "UPDATE_CHECK": "true", "SKIP_UNCHANGED": "true",
                         "ROMS_SYNC_MEDIA": "false", "LOG_ENABLED": "true",
                         "WEB_SHOW_ROMS": "true", "WEB_SHOW_LINK": "true"}
             for key in list(current):
@@ -9222,17 +10967,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     current[key] = val if val in ("info", "debug") else "info"
                 else:
                     current[key] = re.sub(r'["$`\\\r\n]', "", val)
+            Handler._upd_t = 0.0             # the setting of the new-version notice may have changed
             if current.get("SYNC_MODE") not in ("full", "fast", "economy"):
                 current["SYNC_MODE"] = "full" if current.get("SKIP_UNCHANGED") == "false" else "economy"
             with open(CONFIG_FILE, "w") as f:
                 f.write("# ========================================\n")
-                f.write("# Save Sync v1.5.0 - Главный конфиг\n")
+                f.write("# Save Sync v1.6.0 - Главный конфиг\n")
                 f.write("# ========================================\n\n")
                 f.write("# ---- НАСТРОЙКИ СИНХРОНИЗАЦИИ ----\n")
                 f.write(f'SYNC_INTERVAL="{current.get("SYNC_INTERVAL", 0)}"\n')
                 f.write(f'MAX_RETRIES="{current.get("MAX_RETRIES", 3)}"\n')
                 f.write(f'CONFLICT_KEEP_DAYS="{current.get("CONFLICT_KEEP_DAYS", 3)}"\n')
                 f.write(f'NOTIFICATIONS="{current.get("NOTIFICATIONS", "true")}"\n')
+                f.write(f'SYNC_STATES="{current.get("SYNC_STATES", "true")}"\n')
+                f.write(f'HISTORY_KEEP_DAYS="{current.get("HISTORY_KEEP_DAYS", 7)}"\n')
+                f.write(f'HISTORY_KEEP_COUNT="{current.get("HISTORY_KEEP_COUNT", 3)}"\n')
+                f.write(f'UPDATE_CHECK="{current.get("UPDATE_CHECK", "true")}"\n')
                 f.write(f'SYNC_MODE="{current.get("SYNC_MODE", "economy")}"\n')
                 f.write(f'MIN_FREE_KB="{current.get("MIN_FREE_KB", 51200)}"\n\n')
                 f.write("# ---- НАСТРОЙКИ РОМОВ ----\n")
@@ -9435,12 +11185,39 @@ class Handler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         
+        if path == "/api/ping":
+            # why the device may answer slowly: a sync (or a ROM / link transfer) or a game is running
+            busy = ""
+            try:
+                if saves_sync_busy():
+                    busy = "sync"
+                else:
+                    with open("/tmp/save_sync_progress.json") as f:
+                        if (json.loads(f.read().strip() or "{}") or {}).get("active"):
+                            busy = "sync"
+            except (OSError, ValueError, AttributeError):
+                pass
+            if not busy and os.path.exists("/tmp/save_sync_playing"):
+                busy = "game"
+            # the name: the list of devices on another device's page checks who answers at an address
+            # (one Raspberry Pi with two cards gets the same address for both systems); readable by any page
+            body = json.dumps({"ok": True, "busy": busy, "name": device_name_here()}, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path == "/api/status":
             self.api_status()
         elif path == "/api/logs":
             self.api_logs(parsed.query)
         elif path == "/api/config":
             self.api_config()
+        elif path == "/api/roms/cloud_counts":
+            self.api_roms_cloud_counts(parsed.query)
         elif path == "/api/systems":
             self.api_systems()
         elif path == "/api/device":
@@ -9451,10 +11228,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.api_progress()
         elif path == "/api/theme":
             self.api_theme()
+        elif path == "/api/devices":
+            self.api_devices(parsed.query)
         elif path == "/api/link/dests":
             self.api_link_dests(parsed.query)
         elif path == "/api/conflicts":
             self.api_conflicts()
+        elif path == "/api/games":
+            self.api_games()
+        elif path == "/api/history":
+            self.api_history(parsed.query)
         elif path == "/api/cloud/prev":
             self.api_cloud_prev()
         elif path == "/api/sections":
@@ -9530,8 +11313,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.api_sections_save()
         elif parsed.path == "/api/links/saved":
             self.api_saved_links_save()
+        elif parsed.path == "/api/devices/forget":
+            self.api_devices_forget()
         elif parsed.path == "/api/config/import":
             self.api_config_import()
+        elif parsed.path == "/api/history/delete":
+            self.api_conflict_action("hdrop")
+        elif parsed.path == "/api/saves/delete":
+            self.api_saves_delete()
+        elif parsed.path == "/api/history/restore":
+            self.api_conflict_action("hrestore")
         elif parsed.path == "/api/conflicts/restore":
             self.api_conflict_action("restore")
         elif parsed.path == "/api/conflicts/delete":
@@ -9603,52 +11394,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except:
                 pass
         
-        # Облако
+        # the cloud: the last known state at once, checked again in the background
         if os.path.exists(RCLONE_PATH) and os.path.exists(RCLONE_CONF):
-            try:
-                connected, took = cloud_check()
-                if connected:
-                    status["cloud"]["status"] = "connected"
-                    if took > 3:
-                        status["cloud"]["slow"] = int(round(took))
-                    # The volume is asked at most once a minute and given more time: on a slow
-                    # network "about" can take longer than a few seconds. If it fails, the last
-                    # known values are shown instead of 0.
-                    with CLOUD_ABOUT_LOCK:
-                        cached = CLOUD_ABOUT_CACHE.get("vals")
-                        fresh = cached and time.time() - CLOUD_ABOUT_CACHE.get("t", 0) < 60
-                    if fresh:
-                        status["cloud"].update(cached)
-                    else:
-                        try:
-                            about = subprocess.run(
-                                [sys.executable or "python3", os.path.join(BASE, "sync_engine.py"), "about"],
-                                env=dict(os.environ, SS_RCLONE=RCLONE_PATH),
-                                capture_output=True,
-                                text=True,
-                                timeout=20
-                            )
-                            vals = {}
-                            if about.returncode == 0:
-                                for line in about.stdout.split("\n"):
-                                    if "Total:" in line:
-                                        vals["total"] = line.split(":", 1)[1].strip()
-                                    elif "Used:" in line:
-                                        vals["used"] = line.split(":", 1)[1].strip()
-                                    elif "Free:" in line:
-                                        vals["free"] = line.split(":", 1)[1].strip()
-                            if vals:
-                                with CLOUD_ABOUT_LOCK:
-                                    CLOUD_ABOUT_CACHE["vals"] = vals
-                                    CLOUD_ABOUT_CACHE["t"] = time.time()
-                                status["cloud"].update(vals)
-                            elif cached:
-                                status["cloud"].update(cached)
-                        except Exception:
-                            if cached:
-                                status["cloud"].update(cached)
-            except:
-                pass
+            got = cloud_state()
+            if got is None:
+                status["cloud"]["status"] = "checking"
+            else:
+                status["cloud"].update(got)
         
         # Последняя синхронизация
         if os.path.exists(STATUS_FILE):
@@ -9668,6 +11420,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # ping закрыт, хотя всё остальное работает.
         if status["cloud"]["status"] == "connected":
             status["internet"] = True
+        elif status["cloud"]["status"] == "checking":
+            status["internet"] = None           # known when the cloud has answered
         else:
             for host in ("1.1.1.1", "8.8.8.8"):
                 try:
@@ -9689,7 +11443,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if os.path.exists("/tmp/save_sync_download.lock") or os.path.exists("/tmp/save_sync_upload.lock"):
             status["is_syncing"] = True
         
+        status["update"] = self.update_info()
         self.send_json(status)
+
+    def update_info(self):
+        """The newest version of Save Sync (the engine asks GitHub at most once in 20 hours);
+        refreshed in the background, the page gets what is already known."""
+        now = time.time()
+        if now - Handler._upd_t > 600:
+            Handler._upd_t = now
+
+            def job():
+                try:
+                    r = self._engine(["version-check"], 40)
+                    if r.returncode == 0:
+                        Handler._upd = json.loads(r.stdout or "{}")
+                except Exception:
+                    pass
+            threading.Thread(target=job, daemon=True).start()
+        return Handler._upd
 
     def api_logs(self, query):
         params = urllib.parse.parse_qs(query)
@@ -9753,7 +11525,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             pass
         return out
 
+    SYS_CLOUD_FILE = os.path.join(BASE, ".catalog_cache", "systems_cloud.json")
+
     def api_systems(self):
+        if "quick=1" in (urllib.parse.urlparse(self.path).query or ""):
+            self._systems_quick()
+            return
         # (system_has_games: a system folder with games, not only media or leftovers)
         systems = []
         if os.path.exists(ROMS_DIR):
@@ -9768,6 +11545,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # в облако с компьютера, не трогая устройство). Без этого их
         # нельзя было бы выбрать и, соответственно, скачать.
         cloud_only = []
+        in_cloud = []
         cloud_error = True
         try:
             # a slow network needs more than a few seconds (the list is shown only after this)
@@ -9776,6 +11554,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                  "--contimeout", "15s", "--timeout", "20s", "--low-level-retries", "2"],
                 capture_output=True, text=True, timeout=40
             )
+            if result.returncode == 3:
+                cloud_error = False            # no GameROMs folder: no ROMs in the cloud
             if result.returncode == 0:
                 cloud_error = False
                 for line in result.stdout.splitlines():
@@ -9783,6 +11563,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if not parts:
                         continue
                     cloud_sys = parts[-1]
+                    if cloud_sys:
+                        in_cloud.append(cloud_sys)
                     if cloud_sys and cloud_sys not in systems:
                         systems.append(cloud_sys)
                         cloud_only.append(cloud_sys)
@@ -9792,7 +11574,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # Systems that have saves in the cloud (uploaded from another device), even
         # without ROMs anywhere, and PortMaster saves (_ports): all can be excluded.
         port_saves_cloud = False
-        saves_cloud = []
+        saves_cloud, saves_cloud_all = [], []
         if not cloud_error:
             try:
                 r = subprocess.run(
@@ -9807,8 +11589,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         name = parts[-1]
                         if name == "_ports":
                             port_saves_cloud = True
-                        elif not name.startswith(("_", ".")) and name not in systems:
-                            saves_cloud.append(name)
+                        elif not name.startswith(("_", ".")):
+                            saves_cloud_all.append(name)
+                            if name not in systems:
+                                saves_cloud.append(name)
             except Exception:
                 pass
 
@@ -9816,7 +11600,50 @@ class Handler(http.server.BaseHTTPRequestHandler):
         excluded = config.get("EXCLUDED_SYSTEMS", "").split("|") if config.get("EXCLUDED_SYSTEMS") else []
         selected = config.get("ROMS_SYNC_DIRS", "").split("|") if config.get("ROMS_SYNC_DIRS") else []
         
+        if not cloud_error:                    # kept for the next opening of the page
+            try:
+                os.makedirs(os.path.dirname(self.SYS_CLOUD_FILE), exist_ok=True)
+                with open(self.SYS_CLOUD_FILE + ".tmp", "w") as f:
+                    json.dump({"in_cloud": in_cloud, "saves_cloud_all": saves_cloud_all, "port_saves_cloud": port_saves_cloud}, f)
+                os.replace(self.SYS_CLOUD_FILE + ".tmp", self.SYS_CLOUD_FILE)
+            except OSError:
+                pass
+        self._systems_send(systems, cloud_only, in_cloud, saves_cloud, port_saves_cloud, cloud_error)
+
+    def _systems_quick(self):
+        """The systems of this device at once; the cloud part as the last answer had it."""
+        systems = []
+        if os.path.exists(ROMS_DIR):
+            for d in os.listdir(ROMS_DIR):
+                path = os.path.join(ROMS_DIR, d)
+                if os.path.isdir(path) and system_has_games(path, d):
+                    systems.append(d)
+        try:
+            with open(self.SYS_CLOUD_FILE) as f:
+                kept = json.load(f)
+        except (OSError, ValueError):
+            kept = {}
+        in_cloud = [x for x in kept.get("in_cloud") or [] if isinstance(x, str)]
+        cloud_only = [x for x in in_cloud if x not in systems]
+        systems += cloud_only
+        saves_cloud = [x for x in kept.get("saves_cloud_all") or [] if isinstance(x, str) and x not in systems]
+        self._systems_send(systems, cloud_only, in_cloud, saves_cloud, bool(kept.get("port_saves_cloud")), False, quick=True)
+
+    def _systems_send(self, systems, cloud_only, in_cloud, saves_cloud, port_saves_cloud, cloud_error, quick=False):
+        counts = {}
+        for sysname in systems:
+            if sysname not in cloud_only:
+                try:
+                    counts[sysname] = count_games(os.path.join(ROMS_DIR, sysname), sysname)
+                except OSError:
+                    pass
+        config = self.read_config()
+        excluded = config.get("EXCLUDED_SYSTEMS", "").split("|") if config.get("EXCLUDED_SYSTEMS") else []
+        selected = config.get("ROMS_SYNC_DIRS", "").split("|") if config.get("ROMS_SYNC_DIRS") else []
         self.send_json({
+            "quick": quick,
+            "counts": counts,
+            "in_cloud": in_cloud,
             "port_saves_cloud": port_saves_cloud,
             "saves_cloud": saves_cloud,
             "all": systems,
@@ -10094,13 +11921,73 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (OSError, TypeError, ValueError):
             pass
 
+    # ---- ROMs in the cloud: the list of each opened system and the numbers of games
+    def _roms_list_file(self, url):
+        import hashlib
+        return os.path.join(self.LIST_DIR, "roms_" + hashlib.sha1(url.encode("utf-8")).hexdigest()[:10] + ".json")
+
+    def _roms_list_put(self, url, data):
+        try:
+            os.makedirs(self.LIST_DIR, exist_ok=True)
+            out = self._roms_list_file(url)
+            with open(out + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+            os.replace(out + ".tmp", out)
+        except (OSError, TypeError, ValueError):
+            pass
+
+    _counts_lock = threading.Lock()
+
+    def api_roms_cloud_counts(self, query):
+        """{system: games in the cloud}, counted from the cloud files by the same rule as
+        on this device (a gamelist.xml may keep entries of games long deleted).
+        quick=1: what is kept, at once. Otherwise all cloud files are listed with one request."""
+        cache_file = os.path.join(self.LIST_DIR, "roms_counts.json")
+        try:
+            with open(cache_file, encoding="utf-8") as f:
+                cache = json.load(f)
+            if not isinstance(cache, dict):
+                cache = {}
+        except (OSError, ValueError):
+            cache = {}
+        kept = {k: v.get("n") for k, v in cache.items() if isinstance(v, dict)}
+        if "quick=1" in (query or "") or not self._counts_lock.acquire(blocking=False):
+            self.send_json({"counts": kept, "quick": True})
+            return
+        try:
+            cmd = [RCLONE_PATH, "--config", RCLONE_CONF, "lsjson", "-R", "--files-only", "--no-mimetype",
+                   "--no-modtime", "--max-depth", "5", "--exclude", "/*/.*/**", "--exclude", "/*/*/.*/**"]
+            for d in sorted(MEDIA_DIRS_ALL):
+                cmd += ["--exclude", "/*/" + d + "/**"]        # scraped media: not games, not even listed
+            cmd += [REMOTE_ROMS, "--contimeout", "15s", "--timeout", "60s", "--low-level-retries", "2"]
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+                found = [] if r.returncode == 3 else json.loads(r.stdout or "[]") if r.returncode == 0 else None   # 3: no GameROMs
+            except (subprocess.SubprocessError, OSError, ValueError):
+                found = None
+            if found is None:
+                self.send_json({"counts": kept, "error": True})
+                return
+            counts = count_cloud_games([e.get("Path") or "" for e in found])
+            now = {k: {"n": n} for k, n in counts.items()}
+            try:
+                os.makedirs(self.LIST_DIR, exist_ok=True)
+                with open(cache_file + ".tmp", "w", encoding="utf-8") as f:
+                    json.dump(now, f)
+                os.replace(cache_file + ".tmp", cache_file)
+            except OSError:
+                pass
+            self.send_json({"counts": counts})
+        finally:
+            self._counts_lock.release()
+
     def api_link_catalog_cached(self):
         import hashlib
         data = self._json_body()
         url = (data.get("url") or "").strip()
         folder = data.get("dir") or ""
         try:
-            with open(self._cat_list_file(url, folder), encoding="utf-8") as f:
+            with open(self._roms_list_file(url) if url.startswith("savesync://") else self._cat_list_file(url, folder), encoding="utf-8") as f:
                 res = json.load(f)
         except (OSError, ValueError):
             self.send_json({})
@@ -10131,7 +12018,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ---- export / import of the settings (Settings -> Moving the settings)
     IMPORT_GROUPS = {
-        "sync": ("SYNC_INTERVAL", "MAX_RETRIES", "CONFLICT_KEEP_DAYS", "NOTIFICATIONS", "SYNC_MODE", "MIN_FREE_KB"),
+        "sync": ("SYNC_INTERVAL", "MAX_RETRIES", "CONFLICT_KEEP_DAYS", "NOTIFICATIONS", "SYNC_STATES",
+                 "HISTORY_KEEP_DAYS", "HISTORY_KEEP_COUNT", "UPDATE_CHECK", "SYNC_MODE", "MIN_FREE_KB"),
         "excluded": ("EXCLUDED_SYSTEMS",),
         "roms": ("ROMS_SYNC_DIRS", "ROMS_SYNC_MEDIA"),
         "web": ("WEB_SHOW_ROMS", "WEB_SHOW_LINK"),
@@ -10217,7 +12105,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # the cached lists of the links removed
         try:
             for name in os.listdir(self.LIST_DIR):
-                if name.endswith(".json") and "CATALOG_SEEN_" + name[:-5] not in keep:
+                if name.endswith(".json") and not name.startswith("roms_") and "CATALOG_SEEN_" + name[:-5] not in keep:
                     os.remove(os.path.join(self.LIST_DIR, name))
         except OSError:
             pass
@@ -10684,6 +12572,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             sess.last_catalog[folder] = {k: v for k, v in res.items() if k != "es_media"}
             if self._seen_saved(sess.url, folder):
                 self._cat_list_put(sess.url, folder, sess.last_catalog[folder])
+            elif sess.url.startswith("savesync://cloud/"):
+                self._roms_list_put(sess.url, sess.last_catalog[folder])     # shown at once next time
             res["sid"] = self._cat_sid(sess)
             seen = self._seen_update(sess.url, res.get("dir") or "", [(g.get("path"), g.get("size")) for g in res.get("games") or []])
             if seen is not None:
@@ -10957,9 +12847,89 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
             return
         ext = os.path.splitext(p)[1].lower()
-        self._send_file(p, self.CAT_PIC_TYPES.get(ext) or self.CAT_VIDEO_TYPES[ext])
+        if ext not in self.CAT_PIC_TYPES:
+            self._send_file(p, self.CAT_VIDEO_TYPES[ext])
+            return
+        # a picture is kept by the browser: with the version in the link (size and date of the
+        # file) for 30 days; without one it asks the device, which answers "not changed" when so
+        try:
+            st = os.stat(p)
+        except OSError:
+            self.send_error(404)
+            return
+        ctype = self.CAT_PIC_TYPES[ext]
+        tag = "%x-%x" % (int(st.st_mtime), st.st_size)
+        want_small = (q.get("thumb") or [""])[0] == "1" and st.st_size >= self.THUMB_MIN
+        if want_small:
+            tag += "-t"
+        tag = '"%s"' % tag
+        cache = "public, max-age=2592000, immutable" if (q.get("v") or [""])[0] else "no-cache"
+        if self.headers.get("If-None-Match") == tag:     # the browser has it: nothing is made or sent
+            self.send_response(304)
+            self.send_header("ETag", tag)
+            self.send_header("Cache-Control", cache)
+            self.end_headers()
+            return
+        small = self._dev_thumb(p, st) if want_small else None
+        if small:
+            self._send_bytes(small[0], small[1], cache, tag)
+        else:
+            self._send_file(p, ctype, cache, tag)
 
-    def _send_file(self, p, ctype):
+    THUMB_MIN = 48 * 1024                   # a smaller picture is sent as it is
+    THUMB_MAX_MEM = 8 * 1024 * 1024         # previews kept in memory while the web interface runs
+    _thumbs = {}                            # key -> (bytes, type); nothing is written to the card
+    _thumbs_size = 0
+    _thumbs_lock = threading.Lock()
+
+    def _dev_thumb(self, p, st):
+        """(bytes, type) of a small copy (at most 240x320) of a device picture for the lists,
+        made in memory like the previews of the catalog - nothing is written to the card (the
+        browser keeps it, and the web interface while it runs); None when the picture is small
+        already, when Pillow is not on this system (then the picture itself is sent) or it
+        cannot be read."""
+        if st.st_size < self.THUMB_MIN:
+            return None
+        key = "%s|%d|%d" % (p, int(st.st_mtime), st.st_size)
+        with Handler._thumbs_lock:
+            got = Handler._thumbs.get(key)
+        if got:
+            return got
+        try:
+            from PIL import Image
+            import io
+            with Image.open(p) as im:
+                im.thumbnail((240, 320))
+                buf = io.BytesIO()
+                if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+                    im.convert("RGBA").save(buf, "PNG", optimize=True)     # logos: keep the transparency
+                    got = (buf.getvalue(), "image/png")
+                else:
+                    im.convert("RGB").save(buf, "JPEG", quality=82)
+                    got = (buf.getvalue(), "image/jpeg")
+        except Exception:
+            return None
+        with Handler._thumbs_lock:
+            Handler._thumbs[key] = got
+            Handler._thumbs_size += len(got[0])
+            while Handler._thumbs_size > self.THUMB_MAX_MEM and len(Handler._thumbs) > 1:
+                old = next(iter(Handler._thumbs))
+                Handler._thumbs_size -= len(Handler._thumbs.pop(old)[0])
+        return got
+
+    def _send_bytes(self, data, ctype, cache, etag):
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", cache)
+        self.send_header("ETag", etag)
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except OSError:
+            pass
+
+    def _send_file(self, p, ctype, cache="no-store", etag=None):
         """A file with Range support (a phone's video player needs it)."""
         try:
             size = os.path.getsize(p)
@@ -10989,7 +12959,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", ctype)
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(end - start + 1))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", cache)
+            if etag:
+                self.send_header("ETag", etag)
             self.end_headers()
             f.seek(start)
             left = end - start + 1
@@ -11128,6 +13100,55 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return subprocess.run([sys.executable or "python3", os.path.join(BASE, "sync_engine.py")] + args,
                               env=env, capture_output=True, text=True, timeout=timeout)
 
+    # ---- the other devices with Save Sync (records in the cloud, see sync_engine.py "devices")
+    _dev_busy = False
+    _dev_t = 0
+
+    def system_label(self):
+        """"Batocera 43.1", "KNULLI ..." - as short as the record of the device needs."""
+        name = self.get_system()
+        ver = self.get_version()
+        ver = "" if not ver or ver in ("Неизвестно", "Unknown") else ver.split()[0]
+        return (name + " " + ver).strip()
+
+    def api_devices(self, query):
+        """The known devices (the saved list at once); the list is read from the cloud in the
+        background - when asked to (refresh=1) or when the saved one is older than 10 minutes."""
+        params = urllib.parse.parse_qs(query)
+        try:
+            with open(os.path.join(BASE, ".devices_cache.json")) as f:
+                c = json.load(f)
+        except (OSError, ValueError):
+            c = {}
+        now = time.time()
+        # a list with this device only is asked again after a minute: another device may have
+        # just written itself (switched on, updated) - otherwise every 10 minutes
+        others = any(d.get("name") != c.get("self") for d in c.get("list") or [])
+        max_age = 600 if others else 60
+        if not Handler._dev_busy and (params.get("refresh") or now - float(c.get("t") or 0) > max_age) and now - Handler._dev_t > 5:
+            Handler._dev_busy = True
+            Handler._dev_t = now
+
+            def job():
+                try:
+                    self._engine(["devices", "list"], 300)
+                except Exception:
+                    pass
+                finally:
+                    Handler._dev_busy = False
+            threading.Thread(target=job, daemon=True).start()
+        self.send_json({"success": True, "self": c.get("self") or device_name_here(), "list": c.get("list") or [],
+                        "t": c.get("t") or 0, "updating": Handler._dev_busy})
+
+    def api_devices_forget(self):
+        data = self._json_body()
+        name = str(data.get("name") or "")
+        try:
+            r = self._engine(["devices", "forget", name], 120)
+            self.send_json({"success": r.returncode == 0})
+        except Exception:
+            self.send_json({"success": False})
+
     def api_conflicts(self):
         try:
             r = self._engine(["conflicts"], 60)
@@ -11137,6 +13158,60 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception:
             pass
         self.send_json({"success": False, "error": 'Не удалось получить список конфликтов'})
+
+    def api_games(self):
+        try:
+            r = self._engine(["games"], 120)
+            if r.returncode == 0:
+                data = json.loads(r.stdout or "{}")
+                data["success"] = True
+                self.send_json(data)
+                return
+        except Exception:
+            pass
+        self.send_json({"success": False, "error": 'Не удалось получить список сохранений'})
+
+    def api_history(self, query):
+        name = (urllib.parse.parse_qs(query).get("sys") or [""])[0]
+        try:
+            r = self._engine(["history", name], 120)
+            if r.returncode == 0:
+                self.send_json({"success": True, "items": json.loads(r.stdout or "[]")})
+                return
+        except Exception:
+            pass
+        self.send_json({"success": False, "error": 'Не удалось получить прежние версии: нет связи с облаком'})
+
+    def api_saves_delete(self):
+        """The saves of a game deleted here; the sync that starts deletes them everywhere."""
+        data = self._json_body()
+        rels = [str(x) for x in (data.get("rels") or []) if isinstance(x, str)][:500]
+        if not rels:
+            self.send_json({"success": False, "error": 'Нет данных'})
+            return
+        try:
+            r = self._engine(["delsave"] + rels, 120)
+            if r.returncode == 0 and r.stdout.strip() == "local":
+                self.send_json({"success": True, "local": True})    # a system not synced here: nothing to sync
+                return
+            if r.returncode == 3:
+                self.send_json({"success": False, "error": 'Сейчас идёт синхронизация - попробуйте через минуту'})
+                return
+            if r.returncode != 0:
+                self.send_json({"success": False, "error": 'Не удалось удалить сохранения'})
+                return
+            try:
+                with open("/tmp/save_sync_progress.json", "w") as f:
+                    json.dump({"active": False, "action": "upload", "phase": "", "percent": None, "success": None}, f)
+                with open("/tmp/save_sync_progress.log", "w") as f:
+                    pass
+            except OSError:
+                pass
+            self._spawn_op("upload", ["bash", UPLOAD_SCRIPT, "--web-quick"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.send_json({"success": True})
+        except Exception:
+            self.send_json({"success": False, "error": 'Не удалось удалить сохранения'})
 
     def api_conflict_action(self, action):
         try:
@@ -11148,14 +13223,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_json({"success": False, "error": 'Нет данных'})
             return
         try:
-            if action == "delete":
-                r = self._engine(["drop", cid], 60)
+            if action in ("delete", "hdrop"):
+                r = self._engine(["drop" if action == "delete" else "hdrop", cid], 60)
                 if r.returncode == 0:
                     self.send_json({"success": True})
                 else:
                     self.send_json({"success": False, "error": 'Не удалось удалить копию'})
                 return
-            r = self._engine(["restore", cid], 300)
+            r = self._engine(["hrestore" if action == "hrestore" else "restore", cid], 300)
             if r.returncode == 3:
                 self.send_json({"success": False, "error": 'Сейчас идёт синхронизация - попробуйте через минуту'})
                 return
@@ -11224,7 +13299,7 @@ HTML = '''<!DOCTYPE html>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<meta name="theme-color" content="#1565C0">
+<meta name="theme-color" content="#0A0E17">
 <style>
 
 /* Анимация прогресс-бара */
@@ -11393,6 +13468,31 @@ body{font-family:'Roboto','Segoe UI',system-ui,sans-serif;background:var(--bg-pr
 .header h1{font-size:28px;font-weight:500;letter-spacing:-0.5px;color:var(--text-primary)}
 .header .sub{color:var(--text-secondary);font-size:14px;font-weight:400;margin-top:4px}
 .header .device{color:var(--text-muted);font-size:12px;margin-top:4px}
+/* the other devices with Save Sync: a button under the device line, the list below it */
+/* the device line: a switch only when there are other devices (dev-on) */
+.dev-switch.dev-on{display:inline-block;cursor:pointer;padding:4px 12px;border-radius:999px;margin-top:6px;background:transparent;background:color-mix(in srgb,var(--accent) 5%,transparent)}
+.dev-switch.dev-on::after{content:"▾";margin-left:6px;font-size:16px;line-height:1;vertical-align:-2px;color:var(--accent)}     /* as the arrow of "More" in the note */
+@media (hover:hover){.dev-switch.dev-on:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}}
+.dev-panel{position:absolute;left:50%;transform:translateX(-50%);z-index:60;width:min(360px,calc(100% - 8px));margin:0;text-align:left;background:var(--bg-card);border-radius:var(--radius);padding:8px 12px;box-shadow:0 10px 28px rgba(0,0,0,.28),0 2px 6px rgba(0,0,0,.12)}
+.dev-panel{background:#222C40}     /* the dark theme: a step lighter than the tiles under it */
+[data-theme="light"] .dev-panel{background:var(--bg-card)}
+.dev-head{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:6px}
+.dev-me{display:block;color:var(--accent)}
+.dev-switch.dev-on.open::after{content:"▴"}
+.dev-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--chip-bg)}
+.dev-head + .dev-row{border-top:0}
+.dev-dot{flex:none;width:9px;height:9px;border-radius:50%;background:var(--text-muted);opacity:.5}
+.dev-dot.on{background:var(--success);opacity:1}
+.dev-main{flex:1;min-width:0}
+.dev-name{font-size:13px;color:var(--text-primary);font-weight:600;overflow:hidden;text-overflow:ellipsis}
+.dev-meta{font-size:11px;color:var(--text-muted)}
+.dev-act{flex:none;font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:6px}
+a.dev-row{text-decoration:none;color:inherit;cursor:pointer;margin:0 -12px;padding-left:12px;padding-right:12px}
+@media (hover:hover){a.dev-row:hover{background:var(--chip-bg)}}
+.dev-go{font-size:20px;color:var(--text-muted);line-height:1}
+.dev-x{border:0;background:var(--chip-bg);color:var(--text-secondary);width:22px;height:22px;border-radius:50%;cursor:pointer;font-size:14px;line-height:1;padding:0}
+.dev-note{font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.45}
+
 
 /* ========== КНОПКА ТЕМЫ ========== */
 .header .theme-toggle {
@@ -11494,6 +13594,7 @@ body{font-family:'Roboto','Segoe UI',system-ui,sans-serif;background:var(--bg-pr
 .tab-content.active{display:block;margin:0}
 
 /* ========== ЗАГОЛОВКИ СЕКЦИЙ ========== */
+.set-group{margin:22px 0 4px}
 .section-title{font-size:14px;font-weight:500;color:var(--text-secondary);margin-bottom:12px;padding-bottom:4px;border-bottom:2px solid var(--accent);display:inline-block;letter-spacing:0.3px}
 
 /* ========== КНОПКИ ========== */
@@ -11548,6 +13649,33 @@ body{font-family:'Roboto','Segoe UI',system-ui,sans-serif;background:var(--bg-pr
 
 /* ========== ГРУППЫ КНОПОК ========== */
 .actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:16px}
+.actions.act2{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+.actions.act2 .btn{flex:1 1 0;min-width:0;text-transform:none;letter-spacing:0;font-size:14px;font-weight:500;padding:10px 14px;border-radius:10px;
+  box-shadow:none;background:var(--bg-card);color:var(--text-primary);border:1px solid var(--panel-border);display:flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap;transform:none}
+.actions.act2 .btn svg{margin:0 !important;flex:none}
+.actions.act2 .btn:hover{background:var(--chip-bg);transform:none;box-shadow:none}
+/* all sync buttons in the accent colour, well seen */
+.actions.act2 .btn{background:var(--accent);border-color:var(--accent);color:#fff}
+.actions.act2 .btn:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+.act-note{font-size:12px;color:var(--text-secondary);margin:0 0 12px}
+@media (max-width:600px){.actions.act2{flex-direction:column}.actions.act2 .btn{flex:none;width:100%}}
+.roms-ctl{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.roms-panel{background:var(--bg-card);border-radius:var(--radius);padding:12px 14px;border:1px solid var(--panel-border)}
+.roms-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:14px 0 4px;padding-top:12px;border-top:1px solid var(--conf-line)}
+.roms-head #romsViewSw{margin-left:auto}
+.roms-panel .roms-n{opacity:.85;font-weight:400}
+.roms-meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:16px 0}     /* the same air under the buttons as in the saves, and under the numbers */
+.roms-meta .roms-stats{margin:0}
+.roms-hint{color:var(--text-secondary);font-size:12px;margin:10px 0 2px}
+.roms-panel .roms-sys .g-systile{background:var(--bg-secondary)}
+.roms-panel .roms-sys .g-list{background:transparent;padding:0}
+.roms-panel .sync-note{margin:16px 0 8px}     /* under the buttons, as in the saves */
+.roms-ctl .btn{text-transform:none;letter-spacing:0;font-size:12px;padding:5px 12px;border-radius:999px;background:var(--chip-bg);color:var(--text-primary);border:0;box-shadow:none;transform:none}
+@media (hover:hover){.roms-ctl .btn:hover{background:var(--accent);color:#fff;transform:none;box-shadow:none}}   /* a touch screen keeps :hover after a tap */
+.roms-ctl .btn:hover{transform:none;box-shadow:none}
+.roms-ctl .btn svg{width:13px;height:13px}
+.roms-ctl .hint{flex-basis:100%;color:var(--text-secondary);font-size:12px;margin-top:2px}
+.roms-open #romsPanel,.roms-open #romsActs,.roms-open #romsActNote,.roms-open #romsStats,.roms-open #noteRoms{display:none !important}
 
 /* ========== НАСТРОЙКИ ========== */
 .settings-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:6px 0;padding:8px 12px;background:var(--bg-card);border-radius:var(--radius);border:1px solid var(--panel-border);transition:all 0.3s}
@@ -11582,14 +13710,15 @@ body{font-family:'Roboto','Segoe UI',system-ui,sans-serif;background:var(--bg-pr
 .stats-item .num.ok{color:var(--success)}
 .stats-item .num.error{color:var(--error)}
 .roms-stats{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 18px}
-.roms-stats .chip{display:inline-flex;align-items:center;white-space:nowrap;gap:6px;padding:5px 12px;border-radius:999px;background:var(--bg-card);border:1px solid var(--panel-border);font-size:13px;color:var(--text-secondary)}
+.roms-stats .chip{display:inline-flex;align-items:center;white-space:nowrap;gap:6px;padding:5px 12px;border-radius:999px;background:var(--chip-bg);border:0;font-size:13px;color:var(--text-secondary)}
 .roms-stats .chip b{font-weight:600;color:var(--text-primary)}
 .roms-stats .chip.ok b{color:var(--success)}
 .roms-stats .chip.err b{color:var(--error)}
-.roms-stats .chip.err{border-color:var(--error)}
+.roms-stats .chip.err{background:rgba(239,83,80,0.14)}
 @media (max-width:600px){
   /* on a phone: three small tiles in one row, the number above its label */
   .roms-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+  .roms-meta .roms-stats{flex:1 1 100%}     /* the three tiles across the whole width */
   .roms-stats .chip{flex-direction:column-reverse;justify-content:center;gap:1px;padding:6px 4px;border-radius:12px;font-size:11px;min-width:0;white-space:normal;text-align:center;line-height:1.2}
   .roms-stats .chip b{font-size:17px}
 }
@@ -11618,7 +13747,7 @@ body{font-family:'Roboto','Segoe UI',system-ui,sans-serif;background:var(--bg-pr
 .system-item .badge.selected{background:rgba(102,187,106,0.12);color:var(--success);border-color:var(--panel-border)}
 
 /* ========== ПОДПИСЬ ПОД КНОПКАМИ ========== */
-.sync-note{margin-top:6px;padding:10px 16px;background:var(--bg-card);border-radius:var(--radius);border-left:4px solid var(--warning);font-size:11px;color:var(--text-secondary);line-height:1.6;box-shadow:var(--elevation-0)}
+.sync-note{margin-top:6px;padding:10px 16px;background:var(--chip-bg);border-radius:var(--radius);border-left:4px solid var(--warning);font-size:11px;color:var(--text-secondary);line-height:1.6;box-shadow:var(--elevation-0)}
 .sync-note p{margin:3px 0}
 .sync-note p:first-child{cursor:pointer;user-select:none}
 .sync-note .note-caret::before{content:'Скрыть';margin-left:10px;font-size:12px;font-weight:400;color:var(--accent)}
@@ -11647,6 +13776,200 @@ body{font-family:'Roboto','Segoe UI',system-ui,sans-serif;background:var(--bg-pr
 .conflict-meta{font-size:12px;color:var(--text-secondary);margin-top:2px}
 .conflict-actions{display:flex;gap:8px;flex-shrink:0}
 .conflict-actions .btn{padding:6px 14px;font-size:12px;width:auto}
+/* a new version: a light accent tint, the icon, the "What's new" button on the right */
+.update-banner{margin:10px 0;padding:10px 12px 10px 14px;border-radius:var(--radius);border:0;font-size:14px;color:var(--text-primary);
+  background:var(--bg-card);background:color-mix(in srgb,var(--accent) 14%,var(--bg-card));display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.update-banner .upd-ic{flex:none;display:block;color:var(--accent)}
+.update-banner .upd-t{flex:1;min-width:150px}
+.update-banner .upd-t b{font-weight:700}
+.update-banner a.upd-btn{flex:none;background:var(--accent);color:#fff;font-weight:600;font-size:13px;text-decoration:none;padding:7px 14px;border-radius:999px;white-space:nowrap}
+@media (hover:hover){.update-banner a.upd-btn:hover{filter:brightness(1.1)}}
+.net-banner{position:fixed;right:84px;top:16px;z-index:1001;margin:0;max-width:min(420px,calc(100% - 48px));text-align:left;
+  background:var(--bg-secondary);border:1px solid var(--warning);border-left:3px solid var(--warning);box-shadow:var(--elevation-4);padding:12px 16px}
+.net-banner.down{border-color:var(--error)}
+.net-banner .net-alt{display:flex;align-items:center;gap:8px;margin-top:8px;font-weight:600;color:var(--accent);text-decoration:none}
+.net-banner .net-alt .dev-dot{width:9px;height:9px}
+@media (max-width:600px){.net-banner{left:8px;right:60px;top:12px;bottom:auto;max-width:none}}   /* the theme button at the right stays free */   /* the toasts are at the bottom */
+.games-box{margin:10px 0 14px;padding:12px 14px;background:var(--bg-card);border-radius:var(--radius);border:1px solid var(--panel-border)}
+.games-head{display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;padding:0;color:var(--text-primary);font:inherit;font-size:14px;font-weight:600;cursor:pointer;text-align:left}
+.games-sec{margin-top:20px}
+.games-sec.saves-panel{margin-top:0}
+.saves-panel .sync-note{margin:16px 0 8px}     /* some air under the sync buttons */
+.saves-panel .conflicts-box{margin:8px 0}
+/* games left open: "for your information" - the accent tint, a gamepad; the conflicts stay yellow */
+#openBox{background:var(--bg-card);background:color-mix(in srgb,var(--accent) 10%,var(--bg-card));border-color:transparent}
+#openBox .cf-ico,#openBox .cf-n{background:var(--accent);color:#fff}
+#openBox .conflict-row{border-top-color:color-mix(in srgb,var(--accent) 22%,transparent)}
+#gamesBox:not(.saves-open) #gamesBody{margin-top:22px}     /* air between the notices and the list of systems */
+.games-split{border-top:1px solid var(--conf-line);margin:12px 0 10px}
+.saves-open .games-box > .actions,.saves-open #gamesMeta,.saves-open #noteSaves,.saves-open #conflictsBox,.saves-open #openBox,.saves-open .games-split{display:none !important}
+.games-sec .games-box{margin-top:0}
+.games-sum{font-size:13px;color:var(--text-secondary);margin:0}
+.roms-stats .chip.warn b{color:var(--warning)}
+
+@media (max-width:600px){.gs-chips{grid-template-columns:repeat(2,1fr) !important;flex:1 1 100%}}   /* a phone: two tiles in a row (the labels are longer than in the ROMs) */
+.games-caret{color:var(--accent);font-size:14px}
+@media (max-width:600px){.games-head{flex-wrap:wrap}.games-caret{order:2;margin-left:auto}.games-sum{order:3;flex:1 1 100%;text-align:left;white-space:normal;overflow:visible}}
+.g-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--conf-line);cursor:pointer}
+.g-row:first-child{border-top:0}
+.g-row.static{cursor:default}
+.g-main{flex:1;min-width:0}
+.g-name{font-size:14px;font-weight:600;color:var(--text-primary);word-break:break-word}
+.g-meta{font-size:12px;color:var(--text-secondary);margin-top:2px;line-height:1.5}
+.g-arrow{color:var(--text-secondary);font-size:16px;flex:none}
+.g-st{white-space:nowrap}
+.g-st.ok{color:var(--success)}
+.g-st.pending,.g-st.warn{color:var(--warning)}
+.g-st.newer,.g-st.cloud{color:var(--accent)}
+.g-st.off{color:var(--text-secondary)}
+.g-st.excl{color:var(--error)}
+.g-row.excl .g-main,.g-systile.excl:not(.o) .g-systile-name,.g-systile.excl:not(.o) .g-meta{opacity:0.6}
+.g-sw{display:flex;margin:4px 0 8px}
+.g-sw .cat-views button{padding:6px 14px}
+.g-sw .cat-views button.on.x{background:var(--error)}
+.g-exfoot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary);margin:12px 0 4px}
+.g-exfoot button{border:0;background:none;color:var(--accent);font:inherit;cursor:pointer;padding:0;text-decoration:underline}
+.g-others{margin-top:10px;border-top:1px solid var(--conf-line);padding-top:8px}
+.g-others-t{font-size:14px;font-weight:600;color:var(--text-primary);padding:4px 0 0}
+.g-orow{display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--conf-line)}
+.g-orow:first-of-type{border-top:0}
+/* a list scrolls in its own block (as the ROM catalog) */
+.g-scroll{max-height:min(640px,72vh);overflow-y:auto;padding-right:4px}     /* the games of a system scroll in their own block (the list of systems is shown whole) */
+/* a PC: the rows of systems in columns (2, on a wide screen 3); a phone: one */
+@media (min-width:700px){
+  .g-list.cols,.g-olist.cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:24px}
+  .g-list.cols > .g-row,.g-olist.cols > .g-orow{border-top:1px solid var(--conf-line)}
+}
+@media (min-width:1000px){.g-list.cols,.g-olist.cols{grid-template-columns:repeat(3,minmax(0,1fr))}}
+/* the rows of systems: each on its own grey card, as the tiles (no lines between them) */
+.g-list.cols,.g-olist.cols{display:grid;gap:8px}
+.g-list.cols > .g-row{background:var(--bg-secondary);border-radius:8px;padding:10px 12px;border-top:0 !important}
+.g-list.cols > .g-row:hover{background:var(--chip-bg)}
+.g-olist.cols > .g-orow{background:var(--bg-secondary);border-radius:8px;padding:8px 12px;border-top:0 !important}
+.g-orow .nm{flex:1;min-width:0;font-size:14px;color:var(--text-primary);word-break:break-word}
+.g-orow .tg{font-size:11px;color:var(--text-secondary);white-space:nowrap}
+.g-chip{border:0;border-radius:999px;font:inherit;font-size:12px;padding:4px 12px;cursor:pointer;background:var(--chip-bg);color:var(--text-secondary);flex:none}
+.g-chip:hover{color:var(--text-primary)}
+.g-chip.x{background:rgba(239,83,80,0.14);color:var(--error)}
+.g-chip.sel{background:var(--accent);color:#fff}
+.roms-sys .g-systile{background:var(--bg-card)}
+.roms-sys .g-systile:hover{background:var(--chip-bg)}
+.roms-sys .g-systile.rsel,.roms-sys .g-row.rsel{box-shadow:inset 0 0 0 2px var(--accent)}
+.roms-sys .g-list{background:var(--bg-card);border-radius:var(--radius);padding:0 12px}
+.roms-sys .g-row.rsel{border-radius:8px;padding-left:8px;padding-right:8px}
+.roms-host{margin-top:4px}
+.roms-cat-head{margin-bottom:8px}
+/* a ROM system: on a card as the games in the saves, one head line (name, number, switches) */
+#romsHost{background:var(--bg-card);border-radius:var(--radius);padding:12px 14px;margin-top:0}
+#linkBox{margin-top:0}     /* the same gap under a section title everywhere (as in the saves) */
+#romsHost #catBox > .cat-head{display:none}
+#romsHost:not(.cat-on) #romsCatHead #catViews{display:none}
+/* the tiles of a catalog as the game tiles of the saves */
+.cat-list.cat-grid{background:transparent;border:0}
+.cat-grid .cat-tile{background:var(--bg-secondary);padding:8px;border-radius:10px}
+.cat-grid .cat-tile-name{color:var(--text-primary)}
+.cat-list.cat-grid .cat-tiles{padding:8px 2px}     /* room for the 2px outline of the open game at the edges */
+.roms-host #linkTargetRow,.roms-host #linkDest,.roms-host #catBox .cat-back,.roms-host #linkCrumbs{display:none}
+.roms-host .link-controls .btn{flex:1;text-transform:none;letter-spacing:0;font-size:14px;border-radius:10px;padding:10px 14px;box-shadow:none}
+.g-others .g-systiles{padding-top:4px}
+.g-systile.o{cursor:default;display:flex;flex-direction:column;gap:4px}
+.g-systile.o:hover{background:var(--bg-secondary)}
+.g-systile.o .g-chip{align-self:flex-start;margin-top:auto}
+.g-systile.o .tg{font-size:11px;color:var(--text-secondary)}
+.g-systile.o .g-chip{font-size:11px;padding:3px 10px}
+.g-open{font-size:12px;color:var(--warning);margin-top:3px;line-height:1.5}
+.g-nav{display:flex;align-items:center;gap:8px;margin:10px 0 2px}
+.g-back{background:none;border:0;padding:4px 0;color:var(--accent);font:inherit;font-size:13px;cursor:pointer}
+.g-title{font-size:15px;font-weight:600;color:var(--text-primary);margin:6px 0 2px;word-break:break-word}
+.g-sec{font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.3px;margin:14px 0 2px}
+.g-note{font-size:12px;color:var(--text-secondary);line-height:1.5;margin:6px 0}
+.g-list{margin-top:10px}
+.g-row .btn{padding:6px 14px;font-size:12px;width:auto;flex:none}
+.g-backbtn{display:inline-flex;align-items:center;gap:6px}
+.g-backbtn .g-arr{flex:none;display:block}
+.g-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:6px 0 2px}
+.cat-cov.g-cov{width:90px;height:120px;cursor:inherit}     /* the same size as the covers of the ROM catalog */
+@media (max-width:600px){.cat-cov.g-cov{width:72px;height:96px}}
+/* a cover: the picture itself has the rounded corners, nothing is drawn around it (the same in the saves and the ROMs) */
+.cat-cov:not(.cat-tile .cat-cov){display:flex;align-items:center;justify-content:center}
+.cat-cov img{border-radius:6px}
+.cat-cov:not(.cat-tile .cat-cov) img{width:auto;height:auto;max-width:100%;max-height:100%}
+/* a small picture is scaled up to the cover size too (by its longer side), so all covers are the same size */
+.cat-cov:not(.cat-tile .cat-cov) img.cov-w{width:100%;height:auto}
+.cat-cov:not(.cat-tile .cat-cov) img.cov-h{height:100%;width:auto}
+.cat-cov:has(img){background:transparent !important}
+.cat-cov.g-cov-big{width:96px;height:128px;cursor:default}
+.g-hero{display:flex;gap:14px;align-items:flex-start;margin-top:10px}
+.cat-tiles.g-tiles{padding:10px 0 0}     /* on a phone too: to the edges, as the catalog tiles */
+.g-tiles .cat-tile{cursor:pointer;background:var(--bg-secondary);padding:8px;border-radius:10px}
+.g-tiles .cat-tile:hover{background:var(--chip-bg)}
+.g-systiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;padding:0;margin-top:10px}     /* the same gap above as the list (.g-list) */
+@media (max-width:600px){
+  .g-systiles{grid-template-columns:repeat(2,minmax(0,1fr))}   /* a phone: two in a row, the chip at the bottom as on a PC */
+  .g-systile-name,.g-sysrow .g-name,.roms-sys .g-row .g-name{font-size:13px}     /* the systems: smaller text on a phone */
+  .g-systile .g-meta,.g-sysrow .g-meta,.roms-sys .g-row .g-meta{font-size:11px}
+}
+.g-systile{background:var(--bg-secondary);border-radius:8px;padding:8px 10px;cursor:pointer;min-width:0}
+.g-systile:hover{background:var(--chip-bg)}
+.g-systile-name{font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:2px;word-break:break-word}
+.g-systile .g-meta{display:flex;flex-direction:column;gap:1px;margin:0;font-size:12px}
+.g-systile .g-st{white-space:normal}
+.g-systile:not(.o){display:flex;flex-direction:column}
+.g-systile:not(.o) .g-chip{align-self:flex-start;margin-top:auto;font-size:11px;padding:3px 10px}   /* at the bottom: the chips of a row on one line */
+.g-systile:not(.o) .g-meta{margin-bottom:6px}
+/* a wide card (one in a row on a phone, or a big screen): the chip on the right, as in the list */
+.g-systile{position:relative;container-type:inline-size}
+@container (min-width:190px){
+  .g-systile-name,.g-systile .g-meta,.g-systile .tg{padding-right:88px}
+  .g-systile .g-chip{position:absolute;right:10px;top:8px;margin:0 !important}    /* opposite the name */
+}
+.g-row .g-chip{font-size:11px;padding:3px 10px;align-self:flex-start;margin-top:2px}   /* opposite the name */
+/* a system row: the chip in the corner opposite the name, the status line under it uses the whole width */
+.g-sysrow .g-main{position:relative}
+.g-sysrow .g-name{padding-right:96px}
+.g-sysrow .g-chip{position:absolute;top:-1px;right:0;margin:0}
+.g-syshead{justify-content:flex-end}
+/* the list of systems in the saves: the totals and List / Tiles on one line, as in the ROMs */
+.roms-head.g-tophead{margin:0 0 10px;padding-top:0;border-top:0}
+.g-tophead .gs-chips{margin:0;align-items:center}
+.g-tophead .g-topviews{margin-left:auto}
+.g-tophead .g-topviews .cat-views{display:inline-flex}
+.g-tiles .cat-tile-name{color:var(--text-primary)}
+.g-norom{display:inline-block;font-size:10px;font-weight:600;padding:1px 7px;border-radius:999px;background:var(--chip-bg);color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;vertical-align:1px}
+.g-tiles .g-norom{margin-top:3px}
+.g-tiles .g-tile-norom{position:absolute;top:9px;left:9px;margin:0;display:flex;align-items:center;height:22px;padding:0 8px;font-size:10.5px;background:rgba(255,255,255,.85);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);box-shadow:0 1px 4px rgba(0,0,0,.35);color:#4A5568;z-index:1}
+.g-tbadges{position:absolute;top:9px;right:9px;display:flex;flex-direction:column;align-items:flex-end;gap:5px;z-index:1}
+.g-tb{display:flex;align-items:center;gap:3px;height:22px;padding:0 7px;border-radius:999px;font-size:12px;font-weight:700;line-height:1;white-space:nowrap}
+.g-tb .g-ic{margin:0;display:block}
+/* badges on the cover: a light, slightly see-through pill with the colors of the list icons */
+.g-tb{background:rgba(255,255,255,.85);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);box-shadow:0 1px 4px rgba(0,0,0,.35);--ic-hole:rgba(255,255,255,.95)}
+.g-tb.ok{color:#2E9E44}
+.g-tb.pending,.g-tb.warn{color:#D08A00}
+.g-tb.newer,.g-tb.cloud,.g-tb.saves,.g-tb.saves .g-ic{color:#1565C0}
+.g-tb.hist,.g-tb.hist .g-ic{color:#00897B}
+.g-tb.excl,.g-tb.off{color:#555;font-size:10px;text-transform:uppercase}
+.g-tile-warn{position:absolute;top:9px;right:9px;background:var(--warning);color:#3A2A00;border-radius:999px;font-size:10px;font-weight:700;line-height:1.5;padding:0 6px}
+.g-modal{position:fixed;inset:0;background:rgba(0,0,0,0.55);display:none;align-items:center;justify-content:center;z-index:1000;padding:16px}
+.g-modal-card{background:var(--bg-card);border:1px solid var(--panel-border);border-radius:var(--radius);max-width:440px;width:100%;padding:16px;box-shadow:0 10px 40px rgba(0,0,0,0.45);max-height:90vh;overflow:auto}
+.g-cmp{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0 4px}
+.g-cmp-col{background:var(--bg-primary);border-radius:8px;padding:10px;font-size:13px;line-height:1.55;color:var(--text-primary);min-width:0;word-break:break-word}
+.g-cmp-col.to{box-shadow:0 0 0 2px var(--accent)}
+.g-cmp-h{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.3px;color:var(--text-secondary);margin-bottom:4px}
+.g-cmp-col.to .g-cmp-h{color:var(--accent)}
+.g-modal-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap}
+.g-modal-btns .btn{width:auto}
+.g-actions{display:flex;gap:8px;margin-top:8px}
+.g-actions .btn,.g-row .btn.cf-del{padding:6px 14px;font-size:12px;width:auto;flex:none}
+.g-btns{display:flex;flex-direction:column;gap:6px;flex:none}
+.btn.cf-del{background:rgba(239,83,80,0.12);color:var(--error);box-shadow:none}
+.btn.cf-del:hover{background:rgba(239,83,80,0.22);color:var(--error)}
+.g-opt{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text-primary);margin:8px 0;cursor:pointer}
+.g-opt input{width:18px;height:18px;accent-color:var(--accent);margin:0;flex:none}
+.g-files{margin:-4px 0 6px 26px}
+.g-files summary{font-size:12px;color:var(--accent);cursor:pointer;padding:2px 0;list-style-position:inside}
+.g-files .g-opt{margin:6px 0;font-size:13px;align-items:flex-start}
+.g-files .g-opt span{display:flex;flex-direction:column;min-width:0;word-break:break-word}
+.g-files .g-opt .g-meta{margin:0}
 .tab-badge{display:inline-block;padding:1px 7px;margin-left:6px;border-radius:999px;background:var(--warning);color:#3A2A00;font-size:11px;font-weight:700;line-height:1.4;vertical-align:1px}
 
 /* ========== УСТРОЙСТВО ========== */
@@ -11719,7 +14042,8 @@ body::after {
 
 /* ========== АДАПТИВ ========== */
 @media (max-width: 600px) {
-    .container{padding:16px}
+    .container{padding:16px 8px}
+    .games-box,.roms-panel,#romsHost{padding-left:10px;padding-right:10px}     /* a phone: more width for the data */
     .status-grid{grid-template-columns:1fr 1fr;gap:6px}
     .actions{grid-template-columns:1fr}
     .btn-full{grid-column:1}
@@ -11736,7 +14060,7 @@ body::after {
     .btn{padding:8px 14px;font-size:12px}
     .btn-primary{padding: 14px 14px;}
     .status-item .value{font-size:12px;}
-    body{padding:30px 16px}
+    body{padding:24px 8px}     /* a phone: less of the background at the sides */
 }
 
 
@@ -11746,6 +14070,12 @@ body::after {
 .link-input,.link-controls select{flex:1;min-width:0;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);padding:9px 12px;border-radius:var(--radius);font-size:13px;font-family:inherit}
 .link-input{min-width:0}
 .link-input-row .btn{flex:none}
+/* the link field: a clear button inside it while there is text */
+.link-url-wrap{position:relative;flex:1;min-width:0;display:flex}
+.link-url-wrap .link-input{flex:1;padding-right:36px}
+.link-clear{position:absolute;right:7px;top:50%;transform:translateY(-50%);display:flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:var(--chip-bg);color:var(--text-secondary);font-size:16px;line-height:1;cursor:pointer}
+.link-url-wrap .link-input:placeholder-shown + .link-clear{display:none}
+@media (hover:hover){.link-clear:hover{color:var(--text-primary)}}
 .link-input:focus,.link-controls select:focus{outline:none;border-color:var(--accent)}
 .link-saved{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
 .link-saved .ls-label{font-size:12px;color:var(--text-muted);margin-right:2px}
@@ -11768,6 +14098,7 @@ body::after {
 .link-crumbs{font-size:13px;margin:12px 0 6px;color:var(--text-secondary);word-break:break-all}
 .link-crumbs a{color:var(--accent);cursor:pointer}
 .link-list{max-height:380px;overflow-y:auto;border:1px solid var(--panel-border);border-radius:var(--radius);background:var(--bg-primary)}
+.link-list:empty{display:none}
 .link-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--border-color);font-size:13px}
 .link-row:last-child{border-bottom:none}
 .link-row:hover{background:var(--bg-hover)}
@@ -11791,7 +14122,7 @@ body::after {
 @media (max-width:600px){.link-controls select{flex-basis:100%}.link-controls .btn{flex:1}}
 .cat-offer{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0 10px;padding:10px 12px;border:1px solid var(--accent);border-radius:var(--radius);background:var(--bg-primary);font-size:13px;color:var(--text-secondary)}
 .cat-offer span{flex:1;min-width:200px}
-.cat-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0 8px}
+.cat-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0 10px}
 .cat-title{font-weight:600;color:var(--text-primary);flex:1;min-width:0;word-break:break-word;font-size:16px}
 .cat-count{font-weight:400;font-size:13px;color:var(--text-muted);white-space:nowrap;margin-left:4px}
 .cat-back{padding:6px 12px;text-transform:none;letter-spacing:0;font-size:13px;background:var(--bg-primary);color:var(--accent);flex:none}
@@ -11801,6 +14132,7 @@ body::after {
 .cat-kinds input{accent-color:var(--accent)}
 .cat-list{max-height:460px}
 .cat-have{color:var(--success,#2e7d32)}
+.link-row .cat-have svg{color:inherit}
 .cat-detail{padding:10px 12px 12px;margin:8px 10px;background:var(--bg-card);border-radius:8px;font-size:13px;color:var(--text-secondary);display:flex;gap:12px;flex-wrap:wrap}
 .cat-pic{width:160px;min-height:60px;display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--text-muted);font-size:12px}
 .cat-pic-main{display:flex;justify-content:center;min-height:40px}
@@ -11866,11 +14198,68 @@ html.cat-zoom-open,html.cat-zoom-open body{overflow:hidden}
 .cat-tile.open{box-shadow:0 0 0 2px var(--accent)}
 .cat-tile .cat-cov{width:100%;height:auto;aspect-ratio:3/4;border-radius:6px}
 .cat-tile input{position:absolute;top:10px;left:10px;margin:0;width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
-.cat-tile-have{position:absolute;top:9px;right:9px;background:var(--success,#2e7d32);color:#fff;border-radius:999px;font-size:10px;line-height:1.5;padding:0 6px}
+/* "in the cloud" / "on the device" on a catalog tile: the same badge as on the saves tiles */
+.cat-tile-have{position:absolute;top:9px;right:9px;z-index:1;display:flex;align-items:center;height:22px;padding:0 7px;border-radius:999px;font-size:13px;line-height:1;color:#2E9E44;background:rgba(255,255,255,.85);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);box-shadow:0 1px 4px rgba(0,0,0,.35);--ic-hole:#fff}
+.cat-tile-have .g-ic{margin:0;display:block}
 .cat-tile-name{font-size:12px;line-height:1.25;margin-top:5px;max-height:2.5em;overflow:hidden;word-break:break-word;color:var(--accent);cursor:pointer}
 .cat-tile-meta{font-size:11px;color:var(--text-muted);margin-top:2px}
+.g-ic{display:inline-block;vertical-align:-2px;margin-right:3px;flex-shrink:0}
+.g-ic-save{color:var(--accent)}
+.g-ic-state{color:#F57C00}
+.g-sec .g-ic{vertical-align:-2px;margin-right:4px}
+.g-name .g-ic{width:15px;height:15px;vertical-align:-3px;margin-right:5px}
+/* previous versions: a card each, the buttons side by side where there is room */
+.g-vers{display:grid;gap:8px}
+.g-vers > .g-row{background:var(--bg-card);border-radius:8px;padding:10px 12px;border-top:0}
+@media (min-width:600px){.g-vers .g-btns{flex-direction:row}}
+.g-ic-hist{color:#4DB6AC}
+[data-theme="light"] .g-ic-hist{color:#00897B}
+.g-ic-cloud{vertical-align:-0.15em;margin-right:4px}
+.g-ic-dev{vertical-align:-0.2em;margin-right:3px}
+.g-icn{white-space:nowrap}
+.g-tile-icons{display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-top:4px}
+.g-tile-icons .g-icn + .g-icn{margin-left:0}
+.g-tile-icons .g-ic-cloud{margin-right:0}
 .cat-tiles .cat-detail{grid-column:1/-1;margin:0}
-@media (max-width:600px){.link-save{padding-left:14px;padding-right:14px}.link-save .ls-word{display:none}.link-save .ls-star{font-size:16px}.conflict-actions{flex:1 1 100%}.conflict-actions .btn{flex:1;padding:9px 14px}.cat-zoom.nav img{left:16px;width:calc(100% - 32px)}.cat-filters select{flex:1 1 40%;max-width:none;min-width:0}.cat-covers .cat-cov{width:72px;height:96px}.cat-rt-meta{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}.cat-tiles{grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;padding:8px}.cat-head .cat-views{order:3;flex:1 1 100%;display:flex}.cat-views button{flex:1;padding-left:6px;padding-right:6px}.cat-title{min-width:140px}.cat-detail{padding-left:12px}.cat-pic{width:100%;align-items:center}.cat-pic-main,.cat-shots{justify-content:center}.cat-offer .btn{flex:1 1 100%}.cat-pic img,.cat-pic video{max-width:100%}.cat-kinds label{white-space:normal;align-items:flex-start}}
+@media (max-width:600px){.link-save{padding-left:14px;padding-right:14px}.link-save .ls-word{display:none}.link-save .ls-star{font-size:16px}.conflict-actions{flex:1 1 100%}.conflict-actions .btn{flex:1;padding:9px 14px}.cat-zoom.nav img{left:16px;width:calc(100% - 32px)}.cat-filters select{flex:1 1 40%;max-width:none;min-width:0}.cat-covers .cat-cov{width:72px;height:96px}.cat-rt-meta{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}.cat-tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:8px}.cat-head .cat-views{order:3;flex:1 1 100%;display:flex}.cat-views button{flex:1;padding-left:6px;padding-right:6px}.cat-title{min-width:140px}.cat-detail{padding-left:12px}.cat-pic{width:100%;align-items:center}.cat-pic-main,.cat-shots{justify-content:center}.cat-offer .btn{flex:1 1 100%}.cat-pic img,.cat-pic video{max-width:100%}.cat-kinds label{white-space:normal;align-items:flex-start}}
+/* ===== the saves, the ROMs and a ROM system: as the rest of the page - the block on the page background,
+   what is in it on white cards (in the dark theme: a step lighter), as the status tiles above ===== */
+.games-box,.roms-panel,#romsHost{background:var(--bg-secondary)}
+.games-box .g-systile,.roms-panel .g-systile,.roms-panel .roms-sys .g-systile,
+.g-list.cols > .g-row,.g-olist.cols > .g-orow,.g-tiles .cat-tile,#romsHost .cat-grid .cat-tile,
+.games-box .roms-stats .chip,.roms-panel .roms-stats .chip,.games-box .sync-note,.roms-panel .sync-note,
+.games-box .roms-ctl .btn,.roms-panel .roms-ctl .btn,.games-box .cat-views button:not(.on),.roms-panel .cat-views button:not(.on),
+#romsHost .cat-views button:not(.on),#romsHost .link-input,#romsHost .cat-filters select,#romsHost .link-list,
+#romsHost .link-controls select{background:var(--bg-card)}
+.games-box .g-systile:hover,.roms-panel .g-systile:hover,.g-list.cols > .g-row:hover,.g-tiles .cat-tile:hover,#romsHost .cat-grid .cat-tile:hover{background:var(--chip-bg)}
+.cat-list.cat-grid,#romsHost .cat-list.cat-grid{background:transparent}
+/* the link section: the same - the block grey, what is in it white */
+#linkBox{background:var(--bg-secondary)}
+/* these blocks are on the page background: no side padding, so their buttons, lists and notes
+   are as wide as the tabs and the status tiles (as in the settings) */
+.games-box,.roms-panel,#romsHost,#linkBox{padding-left:0 !important;padding-right:0 !important}
+/* no separator lines: the blocks are apart by space, the games of a system are white cards as the systems */
+.games-split{border-top:0;margin:4px 0 6px}
+.roms-head{border-top:0 !important;padding-top:0 !important}
+.g-others{border-top:0;margin-top:22px;padding-top:0}
+.g-others-t{font-size:16px}
+.g-nogame-t{padding:16px 2px 10px;font-size:15px;font-weight:600;color:var(--text-primary)}
+.g-scroll > .g-list{display:grid;gap:8px}
+.g-scroll > .g-list > .g-row{background:var(--bg-card);border-radius:8px;padding:8px 12px;border-top:0 !important}
+.g-scroll > .g-list > .g-row:hover{background:var(--chip-bg)}
+#linkBox .link-input,#linkBox .link-controls select,#linkBox .cat-filters select,#linkBox .link-save,#linkBox .ls-chip:not(.on),
+#linkBox .link-list,#linkBox .cat-views button:not(.on),#linkBox .cat-back,
+#linkBox .cat-grid .cat-tile{background:var(--bg-card)}
+#linkBox .cat-list.cat-grid{background:transparent}
+#linkBox .cat-grid .cat-tile:hover,#linkBox .link-save:hover{background:var(--chip-bg)}     /* the tiles are the white cards, not the list behind them */
+.games-box .cat-back,#romsHost .cat-back{background:var(--bg-card)}
+/* the back button: easy to find - a light accent tint, bold text */
+.g-backbtn.cat-back,#gamesBox .g-backbtn.cat-back,#romsHost .g-backbtn.cat-back,#linkBox .g-backbtn.cat-back{border:0;font-weight:600;background:var(--bg-card);background:color-mix(in srgb,var(--accent) 14%,var(--bg-card))}
+.g-backbtn.cat-back{color:#AEB8F2}
+[data-theme="light"] .g-backbtn.cat-back{color:var(--accent)}
+.roms-stats .chip.err{background:rgba(239,83,80,0.14) !important}
+.roms-panel .roms-sys .g-systile.rsel,.roms-panel .g-row.rsel{background:var(--bg-card)}
+@media (hover:hover){.games-box .roms-ctl .btn:hover,.roms-panel .roms-ctl .btn:hover{background:var(--accent)}}
 </style>
 </head>
 <body>
@@ -11887,8 +14276,11 @@ html.cat-zoom-open,html.cat-zoom-open body{overflow:hidden}
       Save Sync
     </h1>
     <div class="sub">Управление облачной синхронизацией</div>
-    <div class="device" id="deviceInfo">Загрузка...</div>
+    <div class="device dev-switch" id="deviceInfo" onclick="devToggle()" onkeydown="if(event.key==='Enter')devToggle()">Загрузка...</div>
+    <div id="devPanel" class="dev-panel" style="display:none"></div>
   </div>
+  <div id="netBanner" class="update-banner net-banner" style="display:none"></div>
+  <div id="updateBanner" class="update-banner" style="display:none"></div>
 
   <!-- СТАТУСНАЯ ПАНЕЛЬ -->
   <div class="status-grid" id="statusGrid">
@@ -11908,14 +14300,6 @@ html.cat-zoom-open,html.cat-zoom-open body{overflow:hidden}
       <div class="label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" style="vertical-align:0px;margin-right:3px"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z" fill="currentColor"/></svg>Обновлено</div>
       <div class="value" id="sysLastSync">-</div>
     </div>
-    <div class="status-item">
-      <div class="label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" style="vertical-align:0px;margin-right:3px"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm6.93 6h-2.95c-.32-1.25-.78-2.45-1.38-3.56 1.84.63 3.37 1.9 4.33 3.56zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2 0 .68.06 1.34.14 2H4.26zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56-1.84-.63-3.37-1.9-4.33-3.56zm2.95-8H5.08c.96-1.66 2.49-2.93 4.33-3.56C8.81 5.55 8.35 6.75 8.03 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66c-.09-.66-.16-1.32-.16-2 0-.68.07-1.35.16-2h4.68c.09.65.16 1.32.16 2 0 .68-.07 1.34-.16 2zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95c-.96 1.65-2.49 2.93-4.33 3.56zM16.36 14c.08-.66.14-1.32.14-2 0-.68-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2h-3.38z" fill="currentColor"/></svg>Интернет</div>
-      <div class="value" id="sysInternet">-</div>
-    </div>
-    <div class="status-item">
-      <div class="label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" style="vertical-align:0px;margin-right:3px"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM4 12c0-4.42 3.58-8 8-8 1.85 0 3.55.63 4.9 1.69L5.69 16.9C4.63 15.55 4 13.85 4 12zm8 8c-1.85 0-3.55-.63-4.9-1.69L18.31 7.1C19.37 8.45 20 10.15 20 12c0 4.42-3.58 8-8 8z" fill="currentColor"/></svg>Исключено</div>
-      <div class="value" id="sysExcluded">-</div>
-    </div>
   </div>
 
   <!-- ВКЛАДКИ -->
@@ -11929,9 +14313,12 @@ html.cat-zoom-open,html.cat-zoom-open body{overflow:hidden}
 <div id="tab-saves" class="tab-content active">
     <div class="section-title"><svg width="16" height="16" viewBox="-6 -6 36 36" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M19,0H1C0.448,0,0,0.448,0,1v22c0,0.552,0.448,1,1,1h22c0.552,0,1-0.448,1-1V5L19,0z M6,3c0-0.552,0.448-1,1-1h10 c0.552,0,1,0.448,1,1v6c0,0.552-0.448,1-1,1H7c-0.552,0-1-0.448-1-1V3z M20,22H4v-7c0-0.552,0.448-1,1-1h14c0.552,0,1,0.448,1,1V22 z" fill="currentColor"/><path d="M16,9h-4V3h4V9z" fill="currentColor"/></svg>Сохранения</div>
     
-    <div class="actions">
-        <button class="btn btn-primary" onclick="runSyncWithProgress('download')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="currentColor"/></svg>Загрузить сохранения из облака</button>
-        <button class="btn btn-primary" onclick="runSyncWithProgress('upload')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z" fill="currentColor"/></svg>Выгрузить сохранения в облако</button>
+<div id="gamesBox" class="games-sec saves-panel">
+    <div class="section-title games-title" style="display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M21.58 16.09l-1.09-7.66C20.21 6.46 18.52 5 16.53 5H7.47C5.48 5 3.79 6.46 3.51 8.43l-1.09 7.66C2.2 17.63 3.39 19 4.94 19c.68 0 1.32-.27 1.8-.75L9 16h6l2.25 2.25c.48.48 1.13.75 1.8.75 1.56 0 2.75-1.37 2.53-2.91zM11 11H9v2H8v-2H6v-1h2V8h1v2h2v1zm4-1c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm2 3c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1z" fill="currentColor"/></svg><span id="gamesTitle"></span></div>
+    <div class="games-box">
+    <div class="actions act2">
+        <button class="btn btn-primary" onclick="runSyncWithProgress('download')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="currentColor"/></svg>Загрузить из облака</button>
+        <button class="btn btn-primary" onclick="runSyncWithProgress('upload')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z" fill="currentColor"/></svg>Выгрузить в облако</button>
         <button class="btn btn-primary btn-full" onclick="runSyncWithProgress('full')"><svg width="16" height="16" viewBox="0 0 512 512" style="vertical-align:-3px;margin-right:4px"><g transform="translate(0,512) scale(0.1,-0.1)" fill="currentColor"><path d="M2360 4782 l0 -279 -57 -7 c-581 -68 -1130 -424 -1450 -939 -194 -313 -293 -668 -293 -1047 0 -314 65 -597 200 -875 53 -110 165 -289 222 -358 l23 -27 245 195 c135 108 249 200 253 204 5 5 -17 44 -48 87 -103 143 -184 335 -222 522 -24 120 -24 384 0 504 56 281 186 518 392 716 191 185 399 296 652 352 l83 18 2 -226 3 -225 485 408 c267 224 489 411 493 415 5 4 -42 51 -105 103 -373 314 -781 658 -826 695 l-52 44 0 -280z"/><path d="M3900 3558 c-124 -99 -236 -188 -248 -199 l-24 -18 56 -84 c153 -230 220 -458 220 -747 0 -230 -32 -382 -125 -579 -110 -235 -329 -470 -556 -598 -127 -71 -305 -133 -455 -158 l-38 -6 -2 276 -3 276 -485 -408 c-267 -224 -488 -412 -490 -417 -3 -4 216 -194 485 -420 l490 -413 3 227 2 227 68 6 c164 14 424 86 594 165 505 234 893 666 1067 1190 71 212 101 402 101 632 0 314 -65 597 -200 875 -72 149 -206 356 -228 354 -4 0 -108 -81 -232 -181z"/></g></svg>Полная синхронизация</button>
     </div> 
 
@@ -11956,31 +14343,42 @@ html.cat-zoom-open,html.cat-zoom-open body{overflow:hidden}
         <p>• <strong>Выгрузка:</strong> Это действие ВЫГРУЗИТ сохранения из устройства в облако. Выгружаются только новые или измененные файлы. Если файл удалили на устройстве — он УДАЛЯЕТСЯ из облака. Удаление синхронизируется между устройствами. Изменённые на других устройствах сохранения не перезаписываются, а скачиваются сюда.</p>
         <p>• <strong>Полная синхронизация:</strong> Это действие выполнит ПОЛНУЮ синхронизацию. Сначала ЗАГРУЗИТ сохранения из облака, затем ВЫГРУЗИТ сохранения в облако. Если загрузка не удалась, выгрузка не выполняется.</p>
     </div>
+    <div class="roms-meta" id="gamesMeta"><div class="games-sum roms-stats gs-chips" id="gamesSum"></div></div>
+<!-- НЕЗАКРЫТЫЕ ИГРЫ / GAMES LEFT OPEN on other devices (shown only when there are marks) -->
+<div id="openBox" class="conflicts-box" style="display:none">
+    <div class="conflicts-head"><span class="cf-ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M7 6h10a5 5 0 0 1 5 5v2a4 4 0 0 1-7.2 2.4L14 14h-4l-.8 1.4A4 4 0 0 1 2 13v-2a5 5 0 0 1 5-5zm0 3v1.5H5.5v1.5H7v1.5h1.5V12H10v-1.5H8.5V9zm9.5 1a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm-2.5 1.5a1 1 0 1 0 0 2 1 1 0 0 0 0-2z" fill="currentColor"/></svg></span><span id="openHead"></span><span class="cf-n" id="openCount"></span></div>
+    <div class="conflicts-hint" id="openHint"></div>
+    <div id="openList"></div>
+</div>
 <!-- КОНФЛИКТЫ СОХРАНЕНИЙ / SAVE CONFLICTS (shown only when there are copies) -->
 <div id="conflictsBox" class="conflicts-box" style="display:none">
     <div class="conflicts-head"><span class="cf-ico">!</span><span id="conflictsHead"></span><span class="cf-n" id="conflictsCount"></span></div>
     <div class="conflicts-hint" id="conflictsHint"></div>
     <div id="conflictsList"></div>
 </div>
-     
-    <div class="section-title" style="margin-top:20px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM4 12c0-4.42 3.58-8 8-8 1.85 0 3.55.63 4.9 1.69L5.69 16.9C4.63 15.55 4 13.85 4 12zm8 8c-1.85 0-3.55-.63-4.9-1.69L18.31 7.1C19.37 8.45 20 10.15 20 12c0 4.42-3.58 8-8 8z" fill="currentColor"/></svg>Исключения</div>
-    <div style="margin-bottom:10px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-        <button class="btn btn-danger" onclick="excludeAction('clear')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" fill="currentColor"/></svg>Очистить все исключения</button>
-        <span style="color:var(--text-secondary);font-size:12px">Кликните по системе, чтобы исключить/восстановить</span>
+<!-- SAVES BY GAME: systems -> games -> previous versions -->
+        <div class="games-split"></div>
+        <div id="gamesBody"></div>
     </div>
-    <div class="system-list" id="excludeList"><div class="loading"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z" fill="currentColor"/></svg> Загрузка систем...</div></div>
 </div>
+     
+    </div>
 
   <!-- Вкладка Ромы -->
 <div id="tab-roms" class="tab-content">
   <div id="romsSection">
     <div class="section-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" fill="currentColor"/></svg>Ромы</div>
-    <div class="actions">
-        <button class="btn btn-primary" onclick="runSyncWithProgress('roms_download')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="currentColor"/></svg>Загрузить ромы</button>
-        <button class="btn btn-primary" onclick="runSyncWithProgress('roms_upload')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z" fill="currentColor"/></svg>Выгрузить ромы</button>
+<div class="roms-panel" id="romsPanel">
+    <div class="actions act2" id="romsActs">
+        <button class="btn btn-primary" onclick="runSyncWithProgress('roms_download')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="currentColor"/></svg>Загрузить из облака <span class="roms-n"></span></button>
+        <button class="btn btn-primary" onclick="runSyncWithProgress('roms_upload')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z" fill="currentColor"/></svg>Выгрузить в облако <span class="roms-n"></span></button>
     </div>
-    <div id="romsStats" class="roms-stats" title="Статистика загрузки и выгрузки ромов"></div>
-    
+    <div class="sync-note folded" id="noteRoms">
+        <p><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" fill="currentColor"/></svg><strong>ВАЖНО</strong><span class="note-short">: выгрузка удаляет из облака ромы, которых нет на устройстве.</span><span class="note-caret"></span></p>
+        <p>• <strong>Загрузка ромов:</strong> Это действие ЗАГРУЗИТ ромы из облака на устройство. Файлы на устройстве НЕ УДАЛЯЮТСЯ. Будут загружены только новые или измененные файлы.</p>
+        <p>• <strong>Выгрузка ромов:</strong> Это действие УДАЛИТ из облака ромы, которых нет на устройстве. Если на устройстве не хватает каких-то ромов, они исчезнут из облака без возможности восстановления! Рекомендуется сначала ЗАГРУЗИТЬ ромы из облака или сделать бэкап облака.</p>
+    </div>
+  <div class="roms-meta"><div id="romsStats" class="roms-stats" title="Статистика загрузки и выгрузки ромов"></div></div>
 <!-- ПРОГРЕСС-БАР РОМОВ -->
 <div id="syncProgressRoms" style="display:none;margin:10px 0;padding:12px;background:var(--bg-card);border-radius:8px;border:1px solid var(--panel-border)">
     <div style="display:flex;justify-content:space-between;margin-bottom:5px">
@@ -11992,22 +14390,20 @@ html.cat-zoom-open,html.cat-zoom-open body{overflow:hidden}
     </div>
     <div class="op-cancel-row"><button class="btn btn-danger op-cancel" id="opCancelRoms" onclick="cancelOperation()" style="display:none">Отмена</button></div>
 </div>
-
     <!-- ОБЩАЯ ПОДПИСЬ -->
-    <div class="sync-note folded" id="noteRoms">
-        <p><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" fill="currentColor"/></svg><strong>ВАЖНО</strong><span class="note-short">: выгрузка удаляет из облака ромы, которых нет на устройстве.</span><span class="note-caret"></span></p>
-        <p>• <strong>Загрузка ромов:</strong> Это действие ЗАГРУЗИТ ромы из облака на устройство. Файлы на устройстве НЕ УДАЛЯЮТСЯ. Будут загружены только новые или измененные файлы.</p>
-        <p>• <strong>Выгрузка ромов:</strong> Это действие УДАЛИТ из облака ромы, которых нет на устройстве. Если на устройстве не хватает каких-то ромов, они исчезнут из облака без возможности восстановления! Рекомендуется сначала ЗАГРУЗИТЬ ромы из облака или сделать бэкап облака.</p>
-    </div>
-    
-    <div class="section-title" style="margin-top:20px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z" fill="currentColor"/></svg>Выбор систем для копирования и загрузки</div>
-    <div style="margin-bottom:10px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+  <div class="roms-head">
+    <div class="roms-ctl">
         <button class="btn" onclick="selectAllRoms()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="currentColor"/></svg>Выбрать все</button>
-        <button class="btn btn-danger" onclick="deselectAllRoms()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" fill="currentColor"/></svg>Очистить все</button>
+        <button class="btn" onclick="deselectAllRoms()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" fill="currentColor"/></svg>Очистить все</button>
         <button class="btn" onclick="toggleMedia()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z" fill="currentColor"/></svg>Медиа: <span id="mediaStatus">-</span></button>
-        <span style="color:var(--text-secondary);font-size:12px">Кликните по системе, чтобы выбрать/отменить</span>
+        
     </div>
-    <div class="system-list" id="romsList"><div class="loading"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z" fill="currentColor"/></svg> Загрузка систем...</div></div>
+    <div id="romsViewSw"></div>
+  </div>
+  <div class="roms-hint"><span class="hint">Нажмите на систему, чтобы открыть её игры; «Выбрать» - система для кнопок «Загрузить / Выгрузить ромы»</span></div>
+      <div class="roms-sys" id="romsList"><div class="loading"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z" fill="currentColor"/></svg> Загрузка систем...</div></div>
+</div>
+<div id="romsHost" class="roms-host" style="display:none"></div>
 
   </div>
   <div id="linkSection">
@@ -12015,7 +14411,7 @@ html.cat-zoom-open,html.cat-zoom-open body{overflow:hidden}
     <div class="section-title" style="margin-top:20px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z" fill="currentColor"/></svg>Скачать по публичной ссылке</div>
     <div class="link-box" id="linkBox">
       <div class="link-input-row">
-        <input id="linkUrl" class="link-input" type="url" autocomplete="off" placeholder="Вставьте ссылку: Яндекс.Диск, pCloud, Nextcloud, archive.org" onkeydown="if(event.key==='Enter')linkOpen()">
+        <span class="link-url-wrap"><input id="linkUrl" class="link-input" type="url" autocomplete="off" placeholder="Вставьте ссылку: Яндекс.Диск, pCloud, Nextcloud, archive.org" onkeydown="if(event.key==='Enter')linkOpen()"><button type="button" class="link-clear" id="linkClearBtn" onclick="linkClear(true)" title="Очистить" aria-label="Очистить">×</button></span>
         <button class="btn btn-primary" id="linkOpenBtn" onclick="linkOpen()">Открыть</button>
         <button class="btn link-save" id="linkSaveBtn" style="display:none" onclick="linkSaveToggle()"></button>
       </div>
@@ -12023,13 +14419,13 @@ html.cat-zoom-open,html.cat-zoom-open body{overflow:hidden}
       <div class="link-input-row" id="linkPwRow" style="display:none;margin-top:8px">
         <input id="linkPw" class="link-input" type="password" autocomplete="off" placeholder="Пароль ссылки" onkeydown="if(event.key==='Enter')linkOpen()">
       </div>
-      <div class="link-hint">Яндекс.Диск, pCloud, Nextcloud / ownCloud, archive.org или прямая ссылка на файл. Можно выбрать отдельные файлы и папки. Zip-архив открывается как папка: из него можно взять только нужные файлы. Уже скачанные файлы пропускаются, прерванная загрузка продолжается.</div>
+      <div class="link-hint">Яндекс.Диск, pCloud, Nextcloud / ownCloud, archive.org или прямая ссылка на файл. Можно выбрать отдельные файлы и папки. Zip-архив открывается как папка: из него можно взять только нужные файлы. Сборник с описанием игр (gamelist.xml) открывается как каталог: игры с обложками, поиском и фильтрами, выбранные скачиваются вместе с медиа и описанием. Уже скачанные файлы пропускаются, прерванная загрузка продолжается.</div>
       <div class="link-status" id="linkStatus"></div>
       <div id="linkBrowser" style="display:none">
         <div class="link-crumbs" id="linkCrumbs"></div>
         <div class="cat-offer" id="catOffer" style="display:none"><span id="catOfferText"></span><button class="btn btn-primary" onclick="catOpenFromOffer()">Открыть как каталог</button></div>
         <div id="catBox" style="display:none">
-          <div class="cat-head"><button class="btn cat-back" onclick="catClose()">← Файлы</button><div class="cat-title" id="catTitle"></div><div class="cat-views" id="catViews"><button type="button" data-view="list" onclick="catSetView('list')">Список</button><button type="button" data-view="covers" onclick="catSetView('covers')">С обложками</button><button type="button" data-view="grid" onclick="catSetView('grid')">Плитка</button></div></div>
+          <div class="cat-head"><button class="btn cat-back g-backbtn" onclick="catClose()"><svg class="g-arr" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12H5M11 5l-7 7 7 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Файлы</button><div class="cat-title" id="catTitle"></div><div class="cat-views" id="catViews"><button type="button" data-view="list" onclick="catSetView('list')">Список</button><button type="button" data-view="covers" onclick="catSetView('covers')">С обложками</button><button type="button" data-view="grid" onclick="catSetView('grid')">Плитка</button></div></div>
           <input id="catSearch" class="link-input cat-search" type="search" autocomplete="off" placeholder="Поиск игры" oninput="catRender()">
           <div class="cat-filters">
             <select id="catGenre" onchange="catRender()"></select>
@@ -12071,17 +14467,19 @@ html.cat-zoom-open,html.cat-zoom-open body{overflow:hidden}
 
   <!-- ВКЛАДКА: НАСТРОЙКИ -->
   <div id="tab-settings" class="tab-content">
+    <div class="set-group" style="margin-top:0"><div class="section-title">Основное</div></div>
     <div class="settings-row" id="cloudSwitchRow" style="display:none">
       <label>Облако:</label>
       <select id="settingCloud" onchange="cloudSwitch()"></select>
     </div>
-    <div class="settings-hint" id="cloudSwitchHint" style="display:none;color:var(--text-secondary);font-size:12px;margin:-4px 0 10px"><span id="cloudSwitchStatus" style="display:none;color:var(--accent);font-weight:500"></span><span id="cloudSwitchText">Переключение между этим облаком и прежним, которое было подключено до смены облака в центре управления (пункт 16). Сохранения на устройстве объединяются с выбранным облаком: чужие скачаются, свои загрузятся, ничего не удалится. Подключить другое облако можно в центре управления.</span></div>
+    <div class="settings-hint" id="cloudSwitchHint" style="display:none;color:var(--text-secondary);font-size:12px;margin:-4px 0 10px"><span id="cloudSwitchStatus" style="display:none;color:var(--accent);font-weight:500"></span><span id="cloudSwitchText">Переключение между этим облаком и прежним, которое было подключено до смены облака в центре управления (пункт 18). Сохранения на устройстве объединяются с выбранным облаком: чужие скачаются, свои загрузятся, ничего не удалится. Подключить другое облако можно в центре управления.</span></div>
     <div class="settings-row">
       <label>Разделы:</label>
       <label class="sec-opt"><input type="checkbox" id="secRoms" checked onchange="saveSections()">Ромы</label>
       <label class="sec-opt"><input type="checkbox" id="secLink" checked onchange="saveSections()">Загрузка по ссылке</label>
     </div>
     <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px">Показывать в веб-интерфейсе: ромы (выбор систем, загрузка и выгрузка ромов) и загрузку по публичной ссылке с каталогом игр.</div>
+    <div class="set-group"><div class="section-title">Синхронизация</div></div>
     <div class="settings-row">
       <label>Интервал (сек):</label>
       <input type="number" id="settingInterval" value="0" min="0" step="60">
@@ -12101,6 +14499,24 @@ html.cat-zoom-open,html.cat-zoom-open body{overflow:hidden}
       <input type="number" id="settingRetries" value="3" min="1" max="10">
     </div>
     <div class="settings-row">
+      <label>Синхронизация после игры:</label>
+      <select id="settingSyncMode">
+        <option value="economy">Только при изменениях</option>
+        <option value="fast">После каждой игры</option>
+        <option value="full">Полная</option>
+      </select>
+    </div>
+    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px"><b>Только при изменениях:</b> если сохранения на устройстве менялись - синхронизация как в режиме «После каждой игры»; если не менялись, облако не запрашивается, а изменения с других устройств придут при включении устройства или после игры, в которой сохранения изменятся.<br><b>После каждой игры:</b> отправляются и загружаются изменения и удаления, без полного списка файлов в облаке. Подходит для игры на нескольких устройствах.<br><b>Полная:</b> после каждой игры сверяется весь список файлов в облаке, включая добавленные в облако вручную. Самая медленная.<br>При включении устройства и ручном запуске синхронизация всегда полная.</div>
+    <div class="settings-row">
+      <label>Быстрые сохранения:</label>
+      <select id="settingStates">
+        <option value="true">Синхронизировать</option>
+        <option value="false">Не синхронизировать</option>
+      </select>
+    </div>
+    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px">Синхронизация быстрых сохранений (save states). «Не синхронизировать»: это устройство их не отправляет и не скачивает, уже отправленные остаются в облаке. Обычные сохранения синхронизируются всегда.</div>
+    <div class="set-group"><div class="section-title">Копии сохранений</div></div>
+    <div class="settings-row">
       <label>Копии при конфликтах:</label>
       <select id="settingKeepDays">
         <option value="0">Не хранить</option>
@@ -12110,7 +14526,28 @@ html.cat-zoom-open,html.cat-zoom-open body{overflow:hidden}
         <option value="30">30 дней</option>
       </select>
     </div>
-    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px">Если одно и то же сохранение изменили на разных устройствах, остаётся самая новая версия, а более старая хранится в облаке в папке GameSaves_conflicts выбранное время - вернуть её можно во вкладке «Сохранения». При «Не хранить» это устройство не делает копий и не удаляет копии других устройств.</div>
+    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px">Копии сохранений, изменённых на разных устройствах: остаётся самая новая версия, а более старая хранится в облаке (GameSaves_savesync/conflicts) выбранное время - вернуть её можно во вкладке «Сохранения». «Не хранить»: это устройство не делает копий и не удаляет копии других устройств.</div>
+    <div class="settings-row">
+      <label>Прежние версии сохранений:</label>
+      <select id="settingHistDays">
+        <option value="0">Не хранить</option>
+        <option value="1">1 день</option>
+        <option value="3">3 дня</option>
+        <option value="7">7 дней</option>
+        <option value="30">30 дней</option>
+      </select>
+    </div>
+    <div class="settings-row">
+      <label>Количество версий сохранений:</label>
+      <select id="settingHistCount">
+        <option value="1">1</option>
+        <option value="3">3</option>
+        <option value="5">5</option>
+        <option value="10">10</option>
+      </select>
+    </div>
+    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px">Перед тем как сохранение в облаке заменится или удалится, его прежняя версия переносится в папку GameSaves_savesync/history - вернуть её можно на вкладке «Сохранения», на странице игры. Хранится выбранное число дней и не больше выбранного числа версий каждого файла: лишние удаляются при синхронизации, раз в день. «Не хранить»: это устройство не делает копий и не удаляет копии других устройств.</div>
+    <div class="set-group"><div class="section-title">Уведомления</div></div>
     <div class="settings-row">
       <label>Уведомления на экране:</label>
       <select id="settingNotifications">
@@ -12118,16 +14555,16 @@ html.cat-zoom-open,html.cat-zoom-open body{overflow:hidden}
         <option value="false">Выключены</option>
       </select>
     </div>
-    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px">Короткие уведомления о синхронизации и загрузках. Работает на Batocera и KNULLI.</div>
+    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px">Короткие уведомления на экране: синхронизация и загрузки, незакрытые игры на других устройствах, новая версия Save Sync. Работает на Batocera и KNULLI.</div>
     <div class="settings-row">
-      <label>Синхронизация после игры:</label>
-      <select id="settingSyncMode">
-        <option value="economy">Только при изменениях</option>
-        <option value="fast">После каждой игры</option>
-        <option value="full">Полная</option>
+      <label>Сообщать о новой версии:</label>
+      <select id="settingUpdateCheck">
+        <option value="true">Да</option>
+        <option value="false">Нет</option>
       </select>
     </div>
-    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px"><b>Только при изменениях:</b> если сохранения на устройстве менялись - синхронизация как в режиме «После каждой игры»; если не менялись, облако не запрашивается, а изменения с других устройств придут при включении устройства или после игры, в которой сохранения изменятся.<br><b>После каждой игры:</b> отправляются и загружаются изменения и удаления, без полного списка файлов в облаке. Подходит для игры на нескольких устройствах.<br><b>Полная:</b> после каждой игры сверяется весь список файлов в облаке, включая добавленные в облако вручную. Самая медленная.<br>При включении устройства и ручном запуске синхронизация всегда полная.</div>
+    <div class="settings-hint" style="color:var(--text-secondary);font-size:12px;margin:-4px 0 10px">Проверка на GitHub раз в день: вышла ли новая версия Save Sync. Уведомление - на экране устройства и в веб-интерфейсе, обновление - по ссылке.</div>
+    <div class="set-group"><div class="section-title">Журнал</div></div>
     <div class="settings-row">
       <label>Режим лога:</label>
       <select id="settingLogLevel">
@@ -12174,11 +14611,88 @@ function netErr(e) {
   return 'Ошибка: ' + m;
 }
 
+// ---- how the device answers: a small request every 10 s (every 3 s while it does not
+// answer); slow twice in a row or no answer -> a line at the top of the page
+const NET_T = {"go": "перейти", "pick": "Выбрать устройство", "slow": "Медленный ответ устройства: {s} с", "why_sync": "идёт синхронизация", "why_game": "запущена игра", "why_net": "проверьте сеть", "down": "Нет связи с устройством"};
+let netSlow = 0, netDown = false, netTimer = null, devSelfDown = false;
+function netShow() {
+  const el = document.getElementById('netBanner');
+  if (!el) return;
+  if (devSelfDown !== netDown) { devSelfDown = netDown; devRender(); }     // the dot of this device follows it
+  if (netDown) {
+    // the device is gone (switched off): the other devices that answer are offered
+    // (the open page still knows them and their addresses)
+    el.innerHTML = '<span>' + escapeHtml(NET_T.down) + '</span>' + devAltHtml();
+    el.className = 'update-banner net-banner down'; el.style.display = '';
+    devAltPing();
+  } else if (netSlow >= 2) {
+    // why: the device is busy (a sync, a game) or, if not, the network between it and this browser
+    const why = window._netBusy === 'sync' ? NET_T.why_sync : window._netBusy === 'game' ? NET_T.why_game : NET_T.why_net;
+    el.textContent = gFmt(NET_T.slow, {s: (window._netMs / 1000).toFixed(1)}) + ' — ' + why; el.className = 'update-banner net-banner'; el.style.display = '';
+  } else {
+    el.style.display = 'none';
+  }
+}
+async function netPing() {
+  clearTimeout(netTimer);
+  const t0 = performance.now();
+  let ok = false;
+  try {
+    const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const kill = ctl ? setTimeout(() => ctl.abort(), 6000) : null;     // no answer in 6 s = no connection
+    const r = await fetch(API + '/ping', {cache: 'no-store', signal: ctl ? ctl.signal : undefined});
+    if (kill) clearTimeout(kill);
+    ok = r.ok;
+    if (ok) { try { window._netBusy = ((await r.json()) || {}).busy || ''; } catch (e) { window._netBusy = ''; } }
+  } catch (e) { ok = false; }
+  const ms = performance.now() - t0;
+  window._netMs = ms;
+  netDown = !ok;
+  netSlow = ok && ms > 2000 ? netSlow + 1 : (ok && ms < 1000 ? 0 : netSlow);
+  netShow();
+  netTimer = setTimeout(netPing, netDown ? 3000 : 10000);
+}
+netPing();                  // at once: a page that hangs says why
+
+// ---- requests the device answers through the cloud (systems in the cloud, conflicts, numbers
+// of games in the cloud): at most CLOUD_PAR at a time, after what the device itself has. A browser keeps at
+// most 6 requests to one address: cloud requests hanging on a bad Internet must not take them
+// all, or the whole page waits. The same request already waiting shares its answer.
+const cloudQ = [];
+const CLOUD_PAR = 2;
+let cloudBusy = 0, cloudReady = false;
+setTimeout(() => { cloudReady = true; cloudNext(); }, 1200);
+function cloudFetch(endpoint, options = {}) {
+  const key = endpoint + '|' + (options.body || '');
+  const have = cloudQ.find(x => x.key === key);
+  if (have) return have.p;
+  let done;
+  const p = new Promise(r => { done = r; });
+  cloudQ.push({key: key, endpoint: endpoint, options: options, done: done, p: p});
+  cloudNext();
+  return p;
+}
+async function cloudNext() {
+  if (!cloudReady || cloudBusy >= CLOUD_PAR || !cloudQ.length) return;
+  const it = cloudQ.shift();
+  cloudBusy++;
+  cloudNext();                       // a second one may start too
+  const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const kill = ctl ? setTimeout(() => ctl.abort(), 120000) : null;      // the cloud never answered
+  const out = await apiFetch(it.endpoint, Object.assign({}, it.options, ctl ? {signal: ctl.signal} : {}));
+  if (kill) clearTimeout(kill);
+  cloudBusy--;
+  it.done(out);
+  cloudNext();
+}
+
 async function apiFetch(endpoint, options = {}) {
   let res;
   try {
     res = await fetch(API + endpoint, options);
   } catch (e) {
+    if (e && e.name === 'AbortError') return { success: false, error: NET_ERR };   // given up on, not a lost device
+    if (!netDown) { netDown = true; netShow(); netPing(); }     // the device did not answer
     return { success: false, error: NET_ERR };
   }
   try {
@@ -12317,6 +14831,7 @@ async function runSyncWithProgress(action, starter) {
         'full': 'Полная синхронизация',
         'roms_download': 'Загрузка ромов',
         'roms_upload': 'Выгрузка ромов',
+        'saves_delete': G_T.delPhase,
         'conflict_restore': 'Возврат версии'
     };
 
@@ -12381,7 +14896,7 @@ async function runSyncWithProgress(action, starter) {
                     refreshStatus();
                     refreshLogs();
                     refreshStats();
-                    if (target === 'saves') loadConflicts();
+                    if (target === 'saves') { loadConflicts(); loadGames(); }
                     setButtonsDisabled(false);
                 }, 2000);
                 return;
@@ -12435,6 +14950,13 @@ async function runSyncWithProgress(action, starter) {
 const THEME_ICON_SUN = '<svg class="theme-sun" width="1em" height="1em" aria-hidden="true" style="display:block" xmlns="http://www.w3.org/2000/svg" viewBox="30.4 24.1 464.0 464.0" transform="rotate(180)"><g class="sun-rays" stroke="#ffb300" stroke-width="16" stroke-linecap="round"><line pathLength="1" x1="262.4" y1="80.1" x2="262.4" y2="34.1"/><line pathLength="1" x1="329.7" y1="93.5" x2="338.9" y2="71.3"/><line pathLength="1" x1="386.8" y1="131.6" x2="419.3" y2="99.1"/><line pathLength="1" x1="425.0" y1="188.7" x2="447.1" y2="179.6"/><line pathLength="1" x1="438.4" y1="256.1" x2="484.4" y2="256.1"/><line pathLength="1" x1="425.0" y1="323.4" x2="447.1" y2="332.6"/><line pathLength="1" x1="386.8" y1="380.5" x2="419.3" y2="413.1"/><line pathLength="1" x1="329.7" y1="418.7" x2="338.9" y2="440.9"/><line pathLength="1" x1="262.4" y1="432.1" x2="262.4" y2="478.1"/><line pathLength="1" x1="195.0" y1="418.7" x2="185.8" y2="440.9"/><line pathLength="1" x1="137.9" y1="380.5" x2="105.4" y2="413.1"/><line pathLength="1" x1="99.7" y1="323.4" x2="77.6" y2="332.6"/><line pathLength="1" x1="86.4" y1="256.1" x2="40.4" y2="256.1"/><line pathLength="1" x1="99.7" y1="188.7" x2="77.6" y2="179.6"/><line pathLength="1" x1="137.9" y1="131.6" x2="105.4" y2="99.1"/><line pathLength="1" x1="195.0" y1="93.5" x2="185.8" y2="71.3"/></g><g><g><circle style="fill:#f7c931;" cx="262.352" cy="256.091" r="148.94"/></g><g><path style="fill:#ffb300;" d="M166.905,256.091c0-73.127,52.701-133.942,122.194-146.544c-8.678-1.574-17.617-2.4-26.748-2.4 c-82.26,0-148.944,66.684-148.944,148.944s66.684,148.944,148.944,148.944c9.131,0,18.071-0.826,26.748-2.4 C219.607,390.033,166.905,329.218,166.905,256.091z"/><path style="fill:#ffb300;" d="M367.456,300.387c-0.807,0-1.629-0.125-2.438-0.39c-4.115-1.345-6.36-5.772-5.016-9.887 c3.58-10.952,5.395-22.398,5.395-34.019c0-4.329,3.51-7.84,7.84-7.84s7.84,3.51,7.84,7.84c0,13.279-2.076,26.364-6.17,38.89 C373.825,298.287,370.755,300.387,367.456,300.387z"/><path style="fill:#ffb300;" d="M281.708,378.606c-3.579,0-6.811-2.467-7.638-6.104c-0.96-4.223,1.686-8.423,5.908-9.381 c24.888-5.654,47.207-20.014,62.847-40.436c2.634-3.437,7.555-4.09,10.991-1.458c3.438,2.633,4.09,7.553,1.458,10.991 c-17.863,23.324-43.369,39.729-71.822,46.193C282.869,378.542,282.284,378.606,281.708,378.606z"/></g></g></svg>';
 const THEME_ICON_MOON = '<svg width="1em" height="1em" aria-hidden="true" style="display:block" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><g transform="rotate(-90 256 256)"><g><g><path style="fill:#FCE4A8;" d="M90.822,60.408c105.574-92.296,264.984-76,357.28,29.574s84.138,262.286-21.436,354.583 S158.688,529.26,66.392,423.687S-14.752,152.704,90.822,60.408z"/><path style="fill:#F6D89C;" d="M107.702,89.331c99.918-87.352,248.823-74.176,333.823,23.051s75.389,243.385-24.528,330.736 c-99.918,87.352-251.733,82.319-336.733-14.909S7.784,176.683,107.702,89.331z"/><g><path style="fill:#F0C684;" d="M244.034,141.578C226.114,178.849,181.001,192.92,143.73,175 c-37.271-17.92-53.236-61.358-35.316-98.629c17.92-37.271,62.836-54.047,100.107-36.127 C245.792,58.164,261.954,104.307,244.034,141.578z"/><path style="opacity:0.06;fill:#040000;" d="M128.089,97.737c17.92-37.271,62.836-54.047,100.107-36.127 c4.127,1.984,7.995,4.316,11.586,6.943c-7.335-11.909-17.951-21.909-31.261-28.309c-37.271-17.92-82.187-1.144-100.107,36.127 c-15.805,32.873-5.247,70.539,23.036,91.267C118.965,147.179,116.792,121.234,128.089,97.737z"/></g><path style="fill:#F0C684;" d="M217.126,218.456c-1.17-5.733,2.71-11.178,8.442-12.348c5.733-1.17,11.248,2.359,12.418,8.092 s-2.456,11.466-8.189,12.636C224.065,228.005,218.296,224.189,217.126,218.456z"/><path style="opacity:0.5;fill:#FFFFFF;" d="M363.159,97.031c-1.17-5.733,2.71-11.178,8.442-12.348s11.248,2.359,12.418,8.092 c1.17,5.733-2.456,11.466-8.189,12.636C370.097,106.581,364.328,102.764,363.159,97.031z"/><path style="fill:#F0C684;" d="M282.758,398.482c8.691-7.598,21.813-6.256,29.411,2.434c7.598,8.691,6.926,21.591-1.765,29.189 c-8.691,7.598-22.06,6.972-29.658-1.719C273.149,419.697,274.067,406.08,282.758,398.482z"/><path style="opacity:0.5;fill:#FFFFFF;" d="M58.328,221.051c-1.17-5.733,2.71-11.178,8.442-12.348 c5.733-1.17,11.248,2.359,12.418,8.092c1.17,5.733-2.456,11.466-8.189,12.636C65.267,230.6,59.498,226.784,58.328,221.051z"/><path style="fill:#F0C684;" d="M468.957,281.792c-3.725,36.65-37.257,62.1-73.907,58.374c-36.65-3.725-63.179-35.28-59.453-71.93 c3.725-36.65,36.273-64.306,72.923-60.581C445.17,211.381,472.683,245.142,468.957,281.792z"/><g><path style="fill:#F0C684;" d="M173.243,331.228c14.631,25.328,4.867,57.296-20.461,71.927 c-25.328,14.631-57.072,6.642-71.703-18.687c-14.631-25.328-6.526-58.259,18.802-72.89 C125.209,296.946,158.611,305.899,173.243,331.228z"/><path style="opacity:0.06;fill:#040000;" d="M112.82,324.421c18.464-10.666,41.211-8.787,57.856,2.82 c-15.693-22.239-46.848-29.497-70.796-15.664c-25.328,14.631-33.433,47.562-18.802,72.89c4.04,6.993,9.388,12.657,15.541,16.895 c-0.915-1.299-1.789-2.644-2.602-4.052C79.387,371.983,87.492,339.052,112.82,324.421z"/></g><path style="opacity:0.06;fill:#040000;" d="M349.708,282.184c3.725-36.65,36.272-64.306,72.923-60.581 c12.217,1.242,23.416,5.824,32.783,12.736c-11.007-14.534-27.695-24.731-46.895-26.682c-36.65-3.725-69.197,23.931-72.922,60.581 c-2.465,24.248,8.316,46.262,26.507,59.465C352.784,315.151,347.977,299.219,349.708,282.184z"/></g><path style="opacity:0.1;fill:#040000;" d="M254.816,381.8c-105.36,0-198.423-52.065-254.726-131.657 C-2.613,349.865,55.643,444.482,154.03,486.89c128.776,55.508,279.654,1.534,335.162-127.242 c15.267-35.419,21.657-72.749,20.289-109.419C453.171,329.772,360.138,381.8,254.816,381.8z"/></g></g></svg>';
 
+// the browser bar (where the browser supports it) in the colour of the page background
+function themeBar() {
+    const m = document.querySelector('meta[name="theme-color"]');
+    const c = getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim();
+    if (m && c) m.setAttribute('content', c);
+}
+
 async function toggleTheme() {
     const current = document.documentElement.getAttribute('data-theme');
     const newTheme = current === 'light' ? 'dark' : 'light';
@@ -12452,6 +14974,7 @@ async function toggleTheme() {
     }
     
     document.documentElement.setAttribute('data-theme', newTheme);
+    themeBar();
     
     await apiFetch('/theme', {
         method: 'POST',
@@ -12465,6 +14988,7 @@ async function loadTheme() {
     const res = await apiFetch('/theme');
     if (res.theme) {
       document.documentElement.setAttribute('data-theme', res.theme);
+      themeBar();
       // Синхронизируем иконку
       const icon = document.getElementById('themeIcon');
       if (icon) {
@@ -12486,12 +15010,12 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (this.dataset.tab === 'roms') refreshStats();
   });
 });
-
 // ========== СТАТУС (НЕ ОБНОВЛЯЕТ НАСТРОЙКИ) ==========
 
 async function refreshStatus() {
   try {
     const data = await apiFetch('/status');
+    showUpdate(data.update);
     
     // Статистика
     const unch = data.stats?.sync?.unchanged || 0;
@@ -12505,7 +15029,13 @@ async function refreshStatus() {
     const cloudEl = document.getElementById('sysCloud');
     // the card is titled with the cloud service in use (Yandex Disk, pCloud...)
     document.getElementById('sysCloudLabel').textContent = data.cloud?.service || 'Облако';
-    if (data.cloud?.status === 'connected' && data.cloud.slow) {
+    if (data.cloud?.status === 'checking') {
+      // the first look at the cloud is still going: the card is filled when it answers
+      cloudEl.innerHTML = "проверяю…";
+      cloudEl.className = 'value';
+      clearTimeout(window._cloudRetry);
+      window._cloudRetry = setTimeout(refreshStatus, 2000);
+    } else if (data.cloud?.status === 'connected' && data.cloud.slow) {
       // the cloud answers, but slowly - that explains a long sync
       cloudEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" fill="currentColor"/></svg> медленно (' + data.cloud.slow + ' с)';
       cloudEl.className = 'value warning';
@@ -12529,21 +15059,13 @@ async function refreshStatus() {
       syncEl.className = 'value';
     }
     
-    const netEl = document.getElementById('sysInternet');
-    if (data.internet) {
-      netEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="currentColor"/></svg> Доступен';
-      netEl.className = 'value ok';
-    } else {
-      netEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" fill="currentColor"/></svg> Нет';
-      netEl.className = 'value error';
-    }
-    
-    const excl = data.excluded || [];
-    document.getElementById('sysExcluded').textContent = excl.length > 0 ? excl.length + ' систем' : 'Нет';
+    // the Internet: the cloud tile says «no internet»; the excluded systems: in the saves totals
     
     // Показываем систему как в центре управления
     const devicePart = data.device || 'Устройство';
-    const systemPart = (data.system || 'неизвестно') + ' (' + (data.version || '?') + ')';
+    // short, as in the list of devices: "Batocera 43.1" (not the build date and time)
+    const ver = String(data.version || '').trim().split(/ +/)[0];
+    const systemPart = (data.system || 'неизвестно') + (ver && ver !== 'Неизвестно' && ver !== 'Unknown' ? ' ' + ver : '');
     document.getElementById('deviceInfo').innerHTML = '<svg width="11" height="11" viewBox="0 0 512 512" style="vertical-align:-2px"><path d="M84.54,0v512h259.252c46.209,0,83.669-37.459,83.669-83.669V0H84.54z M138.121,53.582H373.88v189.321H138.121V53.582z M215.931,382.887h-25.6v25.6H156.94v-25.6h-25.6v-33.391h25.6v-25.6h33.391v25.6h25.6V382.887z M284.507,445.972c-17.976,0-32.6-14.624-32.6-32.6s14.624-32.6,32.6-32.6s32.6,14.624,32.6,32.6S302.482,445.972,284.507,445.972z M342.138,377.21c-17.976,0-32.6-14.624-32.6-32.6s14.624-32.6,32.6-32.6s32.6,14.624,32.6,32.6S360.114,377.21,342.138,377.21z" fill="currentColor"/></svg> <span style="white-space:nowrap">' + devicePart + '</span> • <span style="white-space:nowrap">' + systemPart + '</span>';
     
     // ================================================================
@@ -12571,6 +15093,12 @@ async function loadSettings() {
       const kd = data.config.CONFLICT_KEEP_DAYS;
       document.getElementById('settingKeepDays').value = (kd === undefined || kd === '') ? '3' : String(kd);
       document.getElementById('settingNotifications').value = data.config.NOTIFICATIONS || 'true';
+      document.getElementById('settingStates').value = data.config.SYNC_STATES === 'false' ? 'false' : 'true';
+      const hd = String(data.config.HISTORY_KEEP_DAYS ?? '7');
+      document.getElementById('settingHistDays').value = ['0', '1', '3', '7', '30'].includes(hd) ? hd : '7';
+      const hc = String(data.config.HISTORY_KEEP_COUNT ?? '3');
+      document.getElementById('settingHistCount').value = ['1', '3', '5', '10'].includes(hc) ? hc : '3';
+      document.getElementById('settingUpdateCheck').value = data.config.UPDATE_CHECK === 'false' ? 'false' : 'true';
       document.getElementById('settingSyncMode').value = ['full', 'fast', 'economy'].includes(data.config.SYNC_MODE)
         ? data.config.SYNC_MODE : (data.config.SKIP_UNCHANGED === 'false' ? 'full' : 'economy');
       document.getElementById('settingLogLevel').value = data.config.LOG_LEVEL === 'debug' ? 'debug' : 'info';
@@ -12689,41 +15217,250 @@ async function clearLogs() {
 
 let saveTimeout = null;
 
-async function toggleRomsSystem(sys) {
-    const container = document.getElementById('romsList');
-    const items = container.querySelectorAll('.system-item');
-    
-    for (const item of items) {
-        if (item.textContent.includes(sys)) {
-            const checkbox = item.querySelector('input[type="checkbox"]');
-            checkbox.checked = !checkbox.checked;
-            item.classList.toggle('selected');
-            const badge = item.querySelector('.badge');
-            if (checkbox.checked) {
-                badge.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="currentColor"/></svg> Выбрана';
-                badge.className = 'badge selected';
-            } else {
-                badge.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM4 12c0-4.42 3.58-8 8-8 1.85 0 3.55.63 4.9 1.69L5.69 16.9C4.63 15.55 4 13.85 4 12zm8 8c-1.85 0-3.55-.63-4.9-1.69L18.31 7.1C19.37 8.45 20 10.15 20 12c0 4.42-3.58 8-8 8z" fill="currentColor"/></svg>';
-                badge.className = 'badge';
-            }
-            break;
+// ---- a ROM system opened: its games as a catalog - in the cloud (download here) or on this
+// device (upload). The catalog and the file list of "Download from a link" are moved here
+// while it is open (savesync://cloud|device/<system>), and back when it is closed.
+const RC_T = {"sortCol": "По списку игр", "back": "Системы", "tabCloud": "Облако", "tabDevice": "Устройство", "inCloudN": "в облаке: {n}", "btnCloud": "Скачать на устройство", "btnDevice": "Выгрузить в облако", "emptyCloud": "В облаке нет ромов этой системы.", "emptyDevice": "На устройстве нет ромов этой системы.", "noList": "Нет описания игр (gamelist.xml) - показаны файлы.", "cloud": {"checking": "Показан сохранённый список. Проверяю облако…", "offline": "Облако не ответило — показан сохранённый список, скачивание недоступно.", "fromLink": "Облако", "replaceHint": "Для игр, которые уже есть на устройстве: медиа и описание из облака заменят свои (название, «избранное» и число запусков останутся)", "replaceNote": "Для игр, которые уже есть на устройстве, будет заменено из облака: {what}", "markChanged": "другая версия", "onlyNew": "Другая версия ({n})"}, "device": {"have": "✓ в облаке", "hideHave": "Нет в облаке", "nothingSel": "Отметьте игры, которые нужно выгрузить", "fromLink": "Устройство", "replaceHint": "Для игр, которые уже есть в облаке: медиа и описание с устройства заменят облачные", "replaceNote": "Для игр, которые уже есть в облаке, будет заменено с устройства: {what}", "keepNote": "Для игр, которые уже есть в облаке, их медиа и описание останутся, добавится только недостающее", "markChanged": "другая версия", "onlyNew": "Другая версия ({n})"}};
+let romsCat = null, romsCatSaved = null;
+const ROMS_MOVED = ['linkStatus', 'linkBrowser', 'syncProgressLink'];
+function romsMount(on) {
+    const host = document.getElementById('romsHost');
+    if (on && !romsCat.homes) {
+        romsCat.homes = ROMS_MOVED.map(id => { const el = document.getElementById(id); return [el, el.parentNode, el.nextSibling]; });
+        ROMS_MOVED.forEach(id => host.appendChild(document.getElementById(id)));
+    } else if (!on && romsCat && romsCat.homes) {
+        romsCat.homes.slice().reverse().forEach(([el, parent, next]) => parent.insertBefore(el, next && next.parentNode === parent ? next : null));
+        romsCat.homes = null;
+    }
+}
+function romsTexts(side) {
+    if (!romsCatSaved) {
+        romsCatSaved = {};
+        ['have', 'hideHave', 'nothingSel', 'fromLink', 'replaceHint', 'replaceNote', 'keepNote', 'markChanged', 'onlyNew', 'checking', 'offline'].forEach(k => { romsCatSaved[k] = CAT_T[k]; });
+        romsCatSaved._link = LINK_T.nothingSel;
+        romsCatSaved.sorts = Object.assign({}, CAT_T.sorts);
+    }
+    Object.keys(romsCatSaved).forEach(k => { if (k !== '_link') CAT_T[k] = k === 'sorts' ? Object.assign({}, romsCatSaved.sorts) : romsCatSaved[k]; });
+    LINK_T.nothingSel = side === 'device' ? "Отметьте файлы или папки, которые нужно выгрузить" : romsCatSaved._link;     // the file list (no gamelist.xml)
+    if (side) {
+        Object.assign(CAT_T, RC_T[side]);
+        CAT_T.sorts.col = RC_T.sortCol;
+    }
+}
+// In the cloud / On this device: only for a system that has ROMs in the cloud and here too
+function romsBothSides(sys) {
+    const d = romsData || {};
+    return (d.in_cloud || []).includes(sys) && !(d.cloud_only || []).includes(sys) && ((d.counts || {})[sys] || 0) > 0;
+}
+function romsHead() {
+    const c = romsCat;
+    const tab = (side, label) => '<button type="button" class="' + (c.side === side ? 'on' : '') + '" onclick="romsOpen(romsCat.sys, &#39;' + side + '&#39;)">' + escapeHtml(label) + '</button>';
+    return '<div class="cat-head roms-cat-head"><button type="button" class="btn cat-back g-backbtn" onclick="romsClose()">' + G_ARROW + escapeHtml(RC_T.back) +
+        '</button><div class="cat-title"><span class="cat-name">' + escapeHtml(c.sys.toUpperCase()) + '</span></div>' +
+        (romsBothSides(c.sys) ? '<div class="cat-views roms-sides">' + tab('device', RC_T.tabDevice) + tab('cloud', RC_T.tabCloud) + '</div>' : '') + '</div>';
+}
+async function romsOpen(sys, side) {
+    if (!sys) return;
+    if (!romsCat) {
+        // a link list or catalog open below the link: it is closed now (the page has one
+        // catalog) and opened again when the system is closed
+        const lb = document.getElementById('linkBrowser');
+        const back = linkState.url && !linkState.url.startsWith('savesync://') && lb && lb.style.display !== 'none'
+            ? { url: linkState.url, dir: linkSavedDir() } : null;
+        romsCat = {sys: sys, side: side || 'cloud', linkBack: back};
+        romsMount(true);
+    }
+    romsCat.sys = sys;
+    romsCat.side = side || 'cloud';
+    const c = romsCat;
+    romsTexts(c.side);
+    document.getElementById('romsList').style.display = 'none';
+    document.getElementById('romsList').previousElementSibling.style.display = 'none';      // Select all / Media: for the systems
+    document.getElementById('romsSection').classList.add('roms-open');
+    const host = document.getElementById('romsHost');
+    host.style.display = 'block';
+    let head = document.getElementById('romsCatHead');
+    if (!head) { head = document.createElement('div'); head.id = 'romsCatHead'; host.insertBefore(head, host.firstChild); }
+    const cv = document.getElementById('catViews');
+    if (head.contains(cv)) document.querySelector('#catBox > .cat-head').appendChild(cv);     // kept while the head is redrawn
+    head.innerHTML = romsHead();
+    head.firstChild.appendChild(cv);     // one head line, as in the saves
+    const url = 'savesync://' + c.side + '/' + encodeURIComponent(sys);
+    const target = c.side === 'cloud' ? 'device' : 'cloud';
+    catState = null;
+    catShow(false);
+    document.getElementById('linkBrowser').style.display = 'none';
+    document.getElementById('linkList').innerHTML = '';      // the files of a link opened before
+    linkSetStatus(LINK_T.loading, false);
+    linkState = { url: url, service: '', root: null, stack: [], password: '', direct: true, target: target,
+                  dests: linkState.dests || {}, probe: null, destManual: true };
+    const r = document.querySelector('input[name="linkTarget"][value="' + target + '"]');
+    if (r) r.checked = true;
+    document.getElementById('linkStartBtn').textContent = c.side === 'cloud' ? RC_T.btnCloud : RC_T.btnDevice;
+    if (c.side === 'cloud') {
+        const cached = await apiFetch('/link/catalog_cached', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: url, password: '', dir: '' }) });
+        if (romsCat !== c || linkState.url !== url) return;
+        if (cached && cached.games) {
+            document.getElementById('linkBrowser').style.display = 'block';
+            catShowCached(cached);
+            if (!linkState.dests[target]) linkLoadDests(target).then(() => { linkFillDests(); if (catState) catSummary(); });
         }
     }
-    
-    clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(saveRomsSelectionSilent, 300);
+    const res = await apiFetch('/link/list', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: url, password: '' }) });
+    if (romsCat !== c || linkState.url !== url) return;            // another system or side meanwhile
+    if (catState && catState.cached && (!res || res.error || !res.root)) { linkSetStatus(CAT_T.offline, true); return; }
+    if (!res || res.error || !res.root) { linkSetStatus((res && res.error) || 'Error', true); return; }
+    if (!res.root.files) { linkSetStatus(c.side === 'cloud' ? RC_T.emptyCloud : RC_T.emptyDevice, false); return; }
+    linkState.service = res.service;
+    linkState.root = res.root;
+    linkState.stack = [res.root];
+    if (!linkState.dests[target]) await linkLoadDests(target);
+    if (romsCat !== c || linkState.url !== url) return;
+    linkFillDests();
+    romsDest();
+    const d = catFindDir(res.root, 1);
+    if (d) {
+        // shown once the games are read (until then only the status line: no file list or button of what was open before)
+        if (catState && catState.cached) catOpen(d.path || '');
+        else await catOpen(d.path || '');
+        if (romsCat !== c || linkState.url !== url) return;
+        if (catState) document.getElementById('linkBrowser').style.display = 'block';
+        if (c.side === 'cloud') setTimeout(() => { romsCountsAt = 0; }, 0);    // the number checked again on the cards
+    } else {
+        linkSetStatus(RC_T.noList, false);
+        document.getElementById('linkBrowser').style.display = 'block';
+        linkRender();
+        linkUpdateSummary();
+    }
+}
+// the system itself is where the games go (also a system not in the cloud yet)
+function romsDest() {
+    const sel = document.getElementById('linkDest');
+    if (!romsCat || !sel) return;
+    if (!Array.from(sel.options).some(o => o.value === romsCat.sys)) {
+        const o = document.createElement('option');
+        o.value = o.textContent = romsCat.sys;
+        sel.appendChild(o);
+    }
+    sel.value = romsCat.sys;
+}
+function romsClose(reopen) {      // reopen === false: the link is being opened right now
+    if (!romsCat) return;
+    const back = romsCat.linkBack;
+    document.querySelector('#catBox > .cat-head').appendChild(document.getElementById('catViews'));
+    romsMount(false);
+    romsCat = null;
+    romsTexts(null);
+    catState = null;
+    catShow(false);
+    linkState = { url: '', service: '', root: null, stack: [], password: '', target: 'device', dests: linkState.dests || {} };
+    const r = document.querySelector('input[name="linkTarget"][value="device"]');
+    if (r) r.checked = true;
+    document.getElementById('linkBrowser').style.display = 'none';
+    document.getElementById('linkStartBtn').textContent = LINK_T.startLabel || document.getElementById('linkStartBtn').dataset.label || document.getElementById('linkStartBtn').textContent;
+    linkSetStatus('', false);
+    linkFillDests();
+    linkSavedRender();
+    document.getElementById('romsHost').style.display = 'none';
+    document.getElementById('romsList').style.display = '';
+    document.getElementById('romsList').previousElementSibling.style.display = '';
+    document.getElementById('romsSection').classList.remove('roms-open');
+    loadSystems();
+    if (back && reopen !== false && document.getElementById('linkUrl').value.trim() === back.url) linkReopen(back);
+}
+// the link list or catalog that was open before a ROM system: shown again below the link
+function linkReopen(back) {
+    const i = linkSaved.findIndex(l => l.url === back.url && l.dir && l.dir === back.dir);
+    if (back.dir && i >= 0) { linkSavedOpen(i); return; }      // a saved catalog: its saved list at once
+    linkPendingCat = back.dir ? { url: back.url, dir: back.dir } : null;
+    linkOpen();
+}
+
+// ---- ROM systems: a list or tiles (the same choice as "Saves by game"); the chip selects
+// the system for the ROM buttons (Download / Upload ROMs)
+const R_T = {"forSel": "Для выбранных систем: {n}", "onlyCloud": "только в облаке", "inCloud": "есть в облаке", "chosen": "Выбрана", "choose": "Выбрать", "none": "Нет систем с ромами", "cloudErr": "Облако не ответило: системы, которые есть только в облаке, сейчас не показаны. Откройте вкладку позже."};
+let romsData = null, romsSel = new Set(), romsCloudN = {}, romsCountsAt = 0;
+// the numbers of games in the cloud: the kept ones at once, then checked (at most once a minute)
+async function romsCounts() {
+  const q = await apiFetch('/roms/cloud_counts?quick=1');
+  if (q && q.counts) { romsCloudN = q.counts; romsRender(); }
+  if (Date.now() - romsCountsAt < 60000) return;
+  romsCountsAt = Date.now();
+  const f = await cloudFetch('/roms/cloud_counts');
+  if (f && f.counts) { romsCloudN = f.counts; romsRender(); }
+}
+function romsRender() {
+  const box = document.getElementById('romsList');
+  const d = romsData;
+  if (!box || !d) return;
+  const all = d.all || [];
+  if (!all.length) { box.innerHTML = '<div class="loading">' + escapeHtml(R_T.none) + '</div>'; return; }
+  let h = '';
+  if (d.cloud_error) h += '<div class="g-note">' + escapeHtml(R_T.cloudErr) + '</div>';
+  const items = all.map((sys, i) => {
+    const sel = romsSel.has(sys);
+    const cloudOnly = (d.cloud_only || []).includes(sys);
+    const nc = romsCloudN[sys];
+    const meta = cloudOnly ? [gSt('cloud', R_T.onlyCloud)].concat(nc != null ? [escapeHtml(gCount(nc, G_T.games))] : []) :
+      [escapeHtml(gCount((d.counts || {})[sys] || 0, G_T.games))].concat((d.in_cloud || []).includes(sys) ?
+        [gSt('ok', nc != null ? gFmt(RC_T.inCloudN, {n: nc}) : R_T.inCloud)] : []);
+    const chip = '<button type="button" class="g-chip' + (sel ? ' sel' : '') + '" onclick="event.stopPropagation(); romsToggle(' + i + ')">' +
+      escapeHtml(sel ? R_T.chosen : R_T.choose) + '</button>';
+    return gamesView === 'tiles'
+      ? '<div class="g-systile r' + (sel ? ' rsel' : '') + '" onclick="romsOpenAt(' + i + ')"><div class="g-systile-name">' + escapeHtml(sys.toUpperCase()) +
+        '</div><div class="g-meta">' + meta.map(x => '<span>' + x + '</span>').join('') + '</div>' + chip + '</div>'
+      : '<div class="g-row r' + (sel ? ' rsel' : '') + '" onclick="romsOpenAt(' + i + ')"><div class="g-main"><div class="g-name">' + escapeHtml(sys.toUpperCase()) +
+        '</div><div class="g-meta">' + meta.join(' · ') + '</div></div>' + chip + '</div>';
+  }).join('');
+  box.innerHTML = h + (gamesView === 'tiles' ? '<div class="g-systiles">' + items + '</div>' : '<div class="g-list cols">' + items + '</div>');
+  const nSel = all.filter(x => romsSel.has(x)).length;
+  document.querySelectorAll('#romsActs .roms-n').forEach(e => { e.textContent = '(' + nSel + ')'; });
+  const sw = document.getElementById('romsViewSw');
+  if (sw) sw.innerHTML = gViews(gamesView, 'gamesSetView');
+}
+// after opening a list the page shows it from its top; the list may come a bit later
+// (from the cloud), so it is checked again when it is drawn - until the user scrolls himself
+let ssScrollEl = null, ssScrollUntil = 0, ssScrollUp = false;
+function ssScrollTo(el, upOnly) {     // upOnly: only when its top went above the screen
+    if (!el) return;
+    ssScrollEl = el;
+    ssScrollUp = !!upOnly;
+    ssScrollUntil = Date.now() + 5000;
+    ssScrollNow();
+}
+function ssScrollNow() {
+    const el = ssScrollEl;
+    if (!el || Date.now() > ssScrollUntil) { ssScrollEl = null; return; }
+    if (!el.offsetParent) return;                              // not shown yet
+    const top = el.getBoundingClientRect().top;
+    if (ssScrollUp ? top < -8 : Math.abs(top) > 8) el.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+function ssScrollAgain() { if (ssScrollEl) requestAnimationFrame(ssScrollNow); }
+['wheel', 'touchstart', 'keydown'].forEach(t => window.addEventListener(t, () => { ssScrollEl = null; }, {passive: true}));
+// a ROM system: its head with the name stays in sight; a link: the list itself
+function linkScrollTop(upOnly) { ssScrollTo(document.getElementById(romsCat ? 'romsHost' : 'linkBrowser'), upOnly); }
+
+function romsOpenAt(i) {
+  const sys = ((romsData || {}).all || [])[i];
+  if (!sys) return;
+  // a system with games here opens on this device (as the catalog: what is here first),
+  // one only in the cloud on its cloud side
+  romsOpen(sys, (romsData.cloud_only || []).includes(sys) || !(romsData.counts || {})[sys] ? 'cloud' : 'device');
+  ssScrollTo(document.getElementById('romsHost'));
+}
+function romsToggle(i) {
+  const sys = ((romsData || {}).all || [])[i];
+  if (!sys) return;
+  if (romsSel.has(sys)) romsSel.delete(sys); else romsSel.add(sys);
+  window._romsSelAt = Date.now(); window._romsSelSaving = true;     // until it is saved
+  romsRender();
+  clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(saveRomsSelectionSilent, 300);
 }
 
 async function saveRomsSelectionSilent() {
-    const selected = [];
-    document.querySelectorAll('#romsList input[type="checkbox"]:checked').forEach(cb => {
-        const item = cb.closest('.system-item');
-        if (item) {
-            const name = item.querySelector('.name')?.textContent;
-            if (name) selected.push(name);
-        }
-    });
-    
+    const selected = ((romsData || {}).all || []).filter(x => romsSel.has(x));
+    window._romsSelSaving = true;
     try {
         const res = await apiFetch('/roms', {
             method: 'POST',
@@ -12737,26 +15474,21 @@ async function saveRomsSelectionSilent() {
     } catch (e) {
         console.error('Save error:', e);
     }
+    window._romsSelSaving = false;
 }
 
 function selectAllRoms() {
-    document.querySelectorAll('#romsList input[type="checkbox"]').forEach(cb => cb.checked = true);
-    document.querySelectorAll('#romsList .system-item').forEach(el => {
-        el.classList.add('selected');
-        const badge = el.querySelector('.badge');
-        if (badge) { badge.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="currentColor"/></svg> Выбрана'; badge.className = 'badge selected'; }
-    });
+    romsSel = new Set((romsData || {}).all || []);
+    window._romsSelAt = Date.now(); window._romsSelSaving = true;     // until it is saved
+    romsRender();
     clearTimeout(saveTimeout);
     saveTimeout = setTimeout(saveRomsSelectionSilent, 300);
 }
 
 function deselectAllRoms() {
-    document.querySelectorAll('#romsList input[type="checkbox"]').forEach(cb => cb.checked = false);
-    document.querySelectorAll('#romsList .system-item').forEach(el => {
-        el.classList.remove('selected');
-        const badge = el.querySelector('.badge');
-        if (badge) { badge.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM4 12c0-4.42 3.58-8 8-8 1.85 0 3.55.63 4.9 1.69L5.69 16.9C4.63 15.55 4 13.85 4 12zm8 8c-1.85 0-3.55-.63-4.9-1.69L18.31 7.1C19.37 8.45 20 10.15 20 12c0 4.42-3.58 8-8 8z" fill="currentColor"/></svg>'; badge.className = 'badge'; }
-    });
+    romsSel = new Set();
+    window._romsSelAt = Date.now(); window._romsSelSaving = true;     // until it is saved
+    romsRender();
     clearTimeout(saveTimeout);
     saveTimeout = setTimeout(saveRomsSelectionSilent, 300);
 }
@@ -12786,35 +15518,34 @@ async function toggleMedia() {
 // ========== СИСТЕМЫ ==========
 
 async function loadSystems() {
+  // the device at once (the cloud part as last time), then the answer of the cloud
+  const seq = (window._sysSeq = (window._sysSeq || 0) + 1);
+  const t0 = Date.now();
+  const quick = await apiFetch('/systems?quick=1');
+  if (quick && quick.all && seq === window._sysSeq) await applySystems(quick, t0);
+  const full = await cloudFetch('/systems');
+  if (full && seq === window._sysSeq) await applySystems(full, t0);
+}
+
+async function applySystems(data, t0) {
   try {
-    const data = await apiFetch('/systems');
     
-    const romsContainer = document.getElementById('romsList');
-    if (data.all && data.all.length > 0) {
-      romsContainer.innerHTML = data.all.map(sys => {
-        const isSelected = data.selected.includes(sys);
-        const isCloudOnly = data.cloud_only && data.cloud_only.includes(sys);
-        return `<div class="system-item ${isSelected ? 'selected' : ''}" onclick="toggleRomsSystem('${sys}')">
-          <input type="checkbox" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); toggleRomsSystem('${sys}')">
-          <div class="name-wrap">
-            <span class="name">${sys}</span>
-            ${isCloudOnly ? '<span class="cloud-badge"><svg width="12" height="8" viewBox="0 0 1280 822" style="vertical-align:-1px;margin-right:2px"><g transform="translate(0,822) scale(0.1,-0.1)" fill="currentColor"><path d="M7121 8205 c-484 -56 -926 -221 -1315 -494 -238 -166 -476 -397 -637 -618 -23 -32 -44 -60 -45 -62 -2 -2 -40 8 -84 23 -117 38 -260 73 -385 92 -150 23 -442 23 -590 0 -611 -94 -1127 -423 -1468 -934 -235 -353 -362 -809 -344 -1229 l6 -132 -32 -5 c-18 -3 -72 -10 -122 -16 -413 -50 -861 -242 -1201 -515 -434 -349 -738 -846 -852 -1395 -38 -183 -47 -272 -46 -495 0 -243 14 -368 63 -571 221 -899 936 -1599 1835 -1794 268 -58 -2 -55 4336 -55 3806 0 4011 1 4125 18 649 97 1197 373 1635 824 142 145 217 237 324 396 233 346 381 728 448 1162 18 116 22 183 22 395 0 282 -16 420 -74 657 -180 738 -643 1363 -1298 1752 -333 198 -715 326 -1104 371 -117 14 -118 14 -118 89 0 95 -59 403 -107 556 -75 243 -205 524 -331 715 -452 687 -1140 1129 -1947 1250 -185 28 -520 35 -694 15z"/></g></svg>только в облаке</span>' : ''}
-          </div>
-          <span class="badge ${isSelected ? 'selected' : ''}">${isSelected ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="currentColor"/></svg> Выбрана' : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM4 12c0-4.42 3.58-8 8-8 1.85 0 3.55.63 4.9 1.69L5.69 16.9C4.63 15.55 4 13.85 4 12zm8 8c-1.85 0-3.55-.63-4.9-1.69L18.31 7.1C19.37 8.45 20 10.15 20 12c0 4.42-3.58 8-8 8z" fill="currentColor"/></svg>'}</span>
-        </div>`;
-      }).join('');
-      if (data.cloud_error) {
-        romsContainer.insertAdjacentHTML('afterbegin', '<div class="cloud-note" style="grid-column:1/-1;font-size:12px;color:var(--text-secondary);padding:4px 2px 8px">⚠️ Облако не ответило: системы, которые есть только в облаке, сейчас не показаны. Откройте вкладку позже.</div>');
-      }
-    } else {
-      romsContainer.innerHTML = '<div class="loading"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M19 3H4.99c-1.11 0-1.98.9-1.98 2L3 19c0 1.1.88 2 1.99 2H19c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 12h-4c0 1.66-1.35 3-3 3s-3-1.34-3-3H4.99V5H19v10z" fill="currentColor"/></svg>Нет систем с ромами</div>';
-    }
-    
+    romsData = Object.assign({}, data, {all: (data.all || []).slice().sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : 1)});
+    // the selection the user made while this answer was on its way stays (the answer still has the old one:
+    // the cloud part comes later, and replacing the selection then lost the first tap)
+    if (!window._romsSelSaving && !(window._romsSelAt && t0 && window._romsSelAt >= t0)) romsSel = new Set(data.selected || []);
+    romsRender();
+    romsCounts();
+
+    window._sysData = data;                 // the systems without saves here: in "Saves by game"
+    if (gamesData && gamesOpen && gamesSys === null) renderGames();
     const excludeContainer = document.getElementById('excludeList');
     // PortMaster ports: one entry for the saves of all ports, like a system
     const hasPorts = (data.port_saves || []).length > 0;
     const exList = (data.all || []).concat(data.saves_cloud || []).concat((hasPorts || data.port_saves_cloud) ? ['PortMaster'] : []);
-    if (exList.length > 0) {
+    if (!excludeContainer) {
+      /* the exclusions are in "Saves by game" */
+    } else if (exList.length > 0) {
       excludeContainer.innerHTML = exList.map(sys => {
         const isExcluded = data.excluded.includes(sys);
         const isCloudOnly = (data.cloud_only && data.cloud_only.includes(sys)) || (data.saves_cloud && data.saves_cloud.includes(sys)) || (sys === 'PortMaster' && !hasPorts);
@@ -12854,6 +15585,7 @@ async function excludeAction(action, system) {
       showToast(res.message, 'success');
       loadSystems();
       refreshStatus();
+      if (typeof loadGames === 'function') loadGames();
     } else {
       showToast((res.error || 'Ошибка'), 'error');
     }
@@ -12874,6 +15606,10 @@ async function saveSettings() {
     MAX_RETRIES: parseInt(document.getElementById('settingRetries').value) || 3,
     CONFLICT_KEEP_DAYS: parseInt(document.getElementById('settingKeepDays').value) || 0,
     NOTIFICATIONS: document.getElementById('settingNotifications').value,
+    SYNC_STATES: document.getElementById('settingStates').value,
+    HISTORY_KEEP_DAYS: parseInt(document.getElementById('settingHistDays').value) || 0,
+    HISTORY_KEEP_COUNT: parseInt(document.getElementById('settingHistCount').value) || 3,
+    UPDATE_CHECK: document.getElementById('settingUpdateCheck').value,
     SYNC_MODE: document.getElementById('settingSyncMode').value,
     LOG_ENABLED: 'true',
     LOG_LEVEL: document.getElementById('settingLogLevel').value
@@ -12923,7 +15659,7 @@ const CONF_T = {"head": "Конфликты сохранений", "hint": "Эт
 async function loadConflicts() {
   const box = document.getElementById('conflictsBox');
   const badge = document.getElementById('conflictsBadge');
-  const res = await apiFetch('/conflicts');
+  const res = await cloudFetch('/conflicts');
   if (!res.success) return;               // the cloud is not reachable: keep what is shown
   const items = res.items || [];
   badge.style.display = items.length ? '' : 'none';
@@ -12960,7 +15696,7 @@ function conflictGame(c) {
   const dot = name.lastIndexOf('.');
   const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
   if (dot > 0) name = name.slice(0, dot);
-  const state = ext.startsWith('state') || ext === 'auto' || name.toLowerCase().endsWith('.state');
+  const state = (c.state !== undefined) ? c.state : (ext.startsWith('state') || ext === 'auto' || name.toLowerCase().endsWith('.state'));
   if (name.toLowerCase().endsWith('.state')) name = name.slice(0, -6);
   return { sys: parts.length > 1 ? parts[0] : '', kind: state ? CONF_T.kindState : CONF_T.kindSave, name: name };
 }
@@ -12996,13 +15732,633 @@ async function conflictDelete(i) {
   loadConflicts();
 }
 
+// ========== SAVES BY GAME, PREVIOUS VERSIONS, NEW VERSION ==========
+const G_T = {"tilePending": "↑ ожидание: {n}", "tileNewer": "↓ новее: {n}", "savesN": ["сохранение", "сохранения", "сохранений"], "st_excl": "исключена", "exclSys": "исключена из синхронизации", "exclHint": "Система исключена: её сохранения на этом устройстве не синхронизируются. Удаление уберёт их только с этого устройства, в облаке и на других устройствах всё останется.", "swSync": "Синхронизировать", "swExcl": "Исключить", "exclCount": "Исключено систем: {n}", "exclClear": "Очистить исключения", "others": "Системы без сохранений: {n}", "othersHint": "Есть игры, но ещё нет сохранений, или сохранения есть только в облаке. Систему можно исключить заранее - тогда её сохранения не будут синхронизироваться на этом устройстве.", "onlyCloud": "только в облаке", "chipSync": "Исключить", "chipExcl": "Исключена", "cloudErr": "Облако не ответило: системы, которые есть только в облаке, сейчас не показаны.", "st_off": "не синхронизируется", "offSys": "не синхронизируется - нет игр на устройстве", "offHint": "Игр этой системы на устройстве нет, поэтому её сохранения здесь не синхронизируются. Удаление уберёт их только с этого устройства - в облаке и на других устройствах они останутся.", "delWarnOff": "Удалится только на этом устройстве. В облаке и на других устройствах сохранения останутся.", "delLocalDone": "Удалено с этого устройства", "pickFiles": "Выбрать файлы", "slot": "слот {n}", "slotAuto": "автосохранение", "delSaves": "Удалить сохранения", "delTitle": "Удалить сохранения игры", "optSaves": "Сохранение игры", "optStates": "Быстрые сохранения", "delWarnHist": "Удалится на этом и на всех остальных устройствах. Удалённое останется в прежних версиях на {days} дн. - его можно будет вернуть.", "delWarnNoHist": "Удалится на этом и на всех остальных устройствах. Прежние версии не хранятся - вернуть будет нельзя.", "delRunning": "Если игра запущена, сначала выйдите из неё.", "delNotHere": "Сохранений этой игры на этом устройстве ещё нет - они придут со следующей синхронизацией.", "delPhase": "Удаление сохранений", "del": "Удалить", "vDelTitle": "Удалить прежнюю версию?", "vDelNote": "Вернуть её будет нельзя. Текущее сохранение не изменится.", "vDeleted": "Версия удалена", "noRom": "нет игры", "noRomSec": "Игр нет на этом устройстве ({n})", "noRomHint": "Самой игры нет на этом устройстве - сохранение хранится здесь и в облаке для других устройств.", "viewList": "Список", "viewTiles": "Плитка", "now": "Сейчас", "to": "Вернуть", "thisDev": "это устройство (ещё не отправлено)", "noFile": "на этом устройстве нет", "replacedShort": "заменена {time}", "deletedShort": "удалена {time}", "restoreNote": "Выбранная версия станет текущей на всех устройствах, а текущая сохранится в прежних версиях. Если игра запущена, сначала выйдите из неё.", "cancel": "Отмена", "title": "Сохранения по играм", "games": ["игра", "игры", "игр"], "versions": ["версия", "версии", "версий"], "en": false, "st_ok": "✓ в облаке", "st_pending": "↑ ждёт отправки", "st_newer": "↓ новее в облаке", "st_cloud": "↓ новое в облаке", "sumOk": "✓ в облаке", "sumGames": "игр с сохранениями: {n}", "sumPending": "↑ ждут отправки: {n}", "sumNewer": "↓ новее в облаке: {n}", "sumOpenShort": "⚠ не закрыто: {n}", "sumOpen": "⚠ не закрыты на другом устройстве: {n}", "openGame": "⚠ Не закрыта на {dev} с {time} - прогресс оттуда мог не дойти до облака. Включите то устройство, чтобы оно отправило сохранения.", "openTitle": "Незакрытые игры", "openShort1": "Прогресс с этого устройства мог не дойти до облака.", "openShortN": "Прогресс с этих устройств мог не дойти до облака.", "openWhere": "открыта на {dev} · с {time}", "openHint": "Включите то устройство - оно отправит сохранения и снимет отметку. Если продолжить игру здесь, отметка снимется после синхронизации, а версия с того устройства потом сохранится в конфликтах.", "last": "последняя версия: {dev}, {time}", "back": "Системы", "gCount": "игр: {n}", "backGames": "{sys}", "saves": "сохранение игры: {n}", "states": "быстрые сохранения: {n}", "prev": "Прежние версии", "loading": "Загрузка прежних версий...", "noPrev": "Прежних версий нет.", "histOff": "Прежние версии не хранятся: это можно включить в настройках («Прежние версии сохранений»).", "histHint": "Хранятся {days} дн., до {count} версий каждого файла. «Вернуть» сделает версию текущей на всех устройствах; текущая версия при этом тоже сохранится здесь.", "kindSave": "сохранение игры", "kindState": "быстрое сохранение", "replaced": "с {dev} · заменена {time}", "deleted": "с {dev} · удалена {time}", "restore": "Вернуть", "notSynced": "эта система не синхронизируется на этом устройстве", "confirm": "Вернуть версию {file} с {dev} ({time})?|Она станет текущей на всех устройствах, а текущая версия сохранится в прежних версиях.|Если эта игра сейчас запущена, сначала выйдите из неё.", "empty": "Сохранений пока нет.", "update": "Доступна новая версия {v}", "updateLink": "Что нового"};
+let gamesData = null, gamesOpen = true, gamesSys = null, gamesKey = null, gamesHist = {};
+
+function gFmt(s, vars) { Object.keys(vars).forEach(k => { s = s.split('{' + k + '}').join(vars[k]); }); return s; }
+function gSavesN(g) { const n = (g.saves || 0) + (g.states || 0); return n ? escapeHtml(gCount(n, G_T.savesN)) : ''; }
+function gCount(n, forms) {
+  if (G_T.en) return n + ' ' + (n === 1 ? forms[0] : forms[1]);
+  const a = n % 100, b = n % 10;
+  return n + ' ' + ((a > 10 && a < 20) ? forms[2] : b === 1 ? forms[0] : (b >= 2 && b <= 4) ? forms[1] : forms[2]);
+}
+function gSize(b) {
+  if (!b || b < 0) return '';
+  if (b < 1024 * 1024) return Math.max(1, Math.round(b / 1024)) + (G_T.en ? ' KB' : ' КБ');
+  return (b / 1048576).toFixed(1) + (G_T.en ? ' MB' : ' МБ');
+}
+function gSt(cls, text) {
+  if (cls === 'ok') return '<span class="g-st ok">' + G_IC_CLOUD + escapeHtml(text.replace(/^✓ */, '')) + '</span>';
+  return '<span class="g-st ' + cls + '">' + escapeHtml(text) + '</span>';
+}
+
+const DEV_ME = '<svg class="dev-me" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const DEV_T = {"btn": "Другие устройства", "title": "Устройства с Save Sync", "self": "это устройство", "open": "Открыть", "off": "не в сети", "today": "сегодня", "at": "{d} в {t}", "seen": "{d}", "checking": "проверяю…", "updating": "Обновляю список из облака…", "only": "Других устройств пока нет. Они появятся здесь, когда на них будет установлена эта версия Save Sync и они включатся.", "forget": "Убрать «{name}» из списка? Если устройство включится снова, оно появится опять.", "close": "Закрыть", "remove": "Убрать из списка", "hint": "Список хранится в облаке: каждое устройство записывает туда свой адрес при включении. Перейти можно на включённое устройство в этой же сети."};
+// ---- the other devices with Save Sync (their records are in the cloud)
+let devData = null, devOnline = {}, devTimer = null;
+function devOthers() { return !!(devData && (devData.list || []).some(x => x.name !== devData.self)); }
+// the device line is a switch only when another device is known (the saved list; the cloud is asked
+// in the background at most every 10 minutes)
+function devMark() {
+  const info = document.getElementById('deviceInfo');
+  const on = devOthers();
+  info.classList.toggle('dev-on', on);
+  info.tabIndex = on ? 0 : -1;
+  info.setAttribute('role', on ? 'button' : 'note');
+  info.title = on ? DEV_T.btn : '';
+  if (!on && document.getElementById('devPanel').style.display !== 'none') { document.getElementById('devPanel').style.display = 'none'; info.classList.remove('open'); }
+}
+let devInitTimer = null;
+async function devInit(tries) {
+  const d = await apiFetch('/devices');
+  if (!d || !d.success) return;
+  devData = d;
+  devMark();
+  clearTimeout(devInitTimer);
+  if (d.updating && (tries || 0) < 40) devInitTimer = setTimeout(() => devInit((tries || 0) + 1), 3000);
+  else if (!devOthers()) devInitTimer = setTimeout(() => devInit(0), 60000);     // no other device yet: looked again every minute
+}
+function devToggle() {
+  if (!devOthers()) return;
+  const p = document.getElementById('devPanel');
+  const info = document.getElementById('deviceInfo');
+  if (p.style.display !== 'none') { devClose(); return; }
+  // a small list over the page, right under the device line
+  p.style.top = (info.offsetTop + info.offsetHeight + 6) + 'px';
+  p.style.display = '';
+  info.classList.add('open');
+  devRender();             // what is known now (also when this device does not answer any more)
+  devLoad(true);
+}
+function devClose() {
+  document.getElementById('devPanel').style.display = 'none';
+  document.getElementById('deviceInfo').classList.remove('open');
+}
+// closed by a tap anywhere else or by Esc
+document.addEventListener('click', e => {
+  const p = document.getElementById('devPanel');
+  if (p && p.style.display !== 'none' && !p.contains(e.target) && !document.getElementById('deviceInfo').contains(e.target)
+      && document.body.contains(e.target)) devClose();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') devClose(); });
+async function devLoad(refresh, tries) {
+  const d = await apiFetch('/devices' + (refresh ? '?refresh=1' : ''));
+  if (!d || !d.success) return;
+  devData = d;
+  devMark();
+  devRender();
+  devPingAll();
+  clearTimeout(devTimer);
+  tries = tries || 0;
+  if (d.updating && tries < 40 && document.getElementById('devPanel').style.display !== 'none')
+    devTimer = setTimeout(() => devLoad(false, tries + 1), 2500);
+}
+function devPingAll() {
+  (devData.list || []).forEach(x => {
+    if (x.name === devData.self || !x.ip) return;
+    const key = x.name + '|' + x.ip + ':' + x.port;
+    if (devOnline[key] === 'wait') return;
+    if (devOnline[key] !== true) devOnline[key] = 'wait';
+    // the device answers with its name: another device at that address (the same Raspberry Pi with
+    // another card got it) is not this one. An older Save Sync gives no readable answer: then any
+    // answer is enough, as before. A handheld on Wi-Fi may answer the first request slowly: asked twice
+    const url = 'http://' + x.ip + ':' + x.port + '/api/ping?t=';
+    const once = (ms, named) => {
+      const ctl = new AbortController();
+      const tm = setTimeout(() => ctl.abort(), ms);
+      return fetch(url + Date.now(), {mode: named ? 'cors' : 'no-cors', cache: 'no-store', signal: ctl.signal})
+        .then(r => !named ? true : r.json().then(j => !(j && j.name) || j.name === x.name, () => true), () => null)
+        .finally(() => clearTimeout(tm));
+    };
+    once(5000, true).then(ok => ok !== null ? ok : once(8000, false).then(v => v === true))
+      .then(ok => { devOnline[key] = ok; devRender(); if (netDown) netShow(); });
+  });
+}
+// when this device stops answering: the others that answer now
+let devAltT = 0;
+function devAltList() {
+  if (!devData) return [];
+  return (devData.list || []).filter(x => x.name !== devData.self && x.ip && devOnline[x.name + '|' + x.ip + ':' + x.port] === true);
+}
+function devAltHtml() {
+  const alt = devAltList();
+  if (!alt.length) return '';
+  if (alt.length === 1) {
+    const x = alt[0];
+    const label = [x.model, x.system].filter(Boolean).join(' · ') || x.name;
+    return '<a class="net-alt" href="http://' + escapeHtml(x.ip) + ':' + (x.port | 0) + '/"><span class="dev-dot on"></span>' +
+      escapeHtml(label) + ' — ' + escapeHtml(NET_T.go) + '</a>';
+  }
+  return '<a class="net-alt" href="#" onclick="event.preventDefault(); window.scrollTo(0, 0); devToggle();"><span class="dev-dot on"></span>' + escapeHtml(NET_T.pick) + ' ▾</a>';
+}
+function devAltPing() {
+  if (!devData || Date.now() - devAltT < 10000) return;
+  devAltT = Date.now();
+  devPingAll();
+}
+function devDate(t) {          // "today at 14:32" or "31.10 at 14:32"
+  if (!t) return '';
+  const d = new Date(t * 1000), z = n => (n < 10 ? '0' : '') + n;
+  const day = d.toDateString() === new Date().toDateString() ? DEV_T.today : z(d.getDate()) + '.' + z(d.getMonth() + 1);
+  return gFmt(DEV_T.at, {d: day, t: z(d.getHours()) + ':' + z(d.getMinutes())});
+}
+function devRender() {
+  const p = document.getElementById('devPanel');
+  if (!p || !devData) return;
+  const me = devData.self;
+  const list = (devData.list || []).slice().sort((a, b) => (a.name === me ? -1 : b.name === me ? 1 : (b.t || 0) - (a.t || 0)));
+  let h = '<div class="dev-head">' + escapeHtml(DEV_T.title) + '</div>';      // closed by the device line above (▴)
+  if (!list.some(x => x.name === me)) list.unshift({name: me, model: '', system: '', self: true});
+  list.forEach(x => {
+    const own = x.name === me;
+    const key = x.name + '|' + x.ip + ':' + x.port;
+    const st = own ? !netDown : devOnline[key];      // this device: grey once it stops answering
+    const label = [x.model, x.system].filter(Boolean).join(' · ') || x.name;
+    let act;
+    if (own) act = '<span title="' + escapeHtml(DEV_T.self) + '">' + DEV_ME + '</span>';
+    else if (st === true) act = '<span class="dev-go">›</span>';
+    else if (st === 'wait' || st === undefined) act = escapeHtml(DEV_T.checking);
+    else act = '<button type="button" class="dev-x" title="' + escapeHtml(DEV_T.remove) + '" onclick="devForget(' + JSON.stringify(x.name).split('"').join('&quot;') + ')">×</button>';
+    const meta = [x.name !== label ? x.name : '', x.ip && !own ? x.ip : ''].filter(Boolean).join(' · ');
+    const seen = !own && st === false && x.t ? gFmt(DEV_T.seen, {d: devDate(x.t)}) : '';      // a line of its own
+    // a device that answers: the whole row is the link to its web interface
+    const go = !own && st === true;
+    const tag = go ? 'a' : 'div';
+    h += '<' + tag + ' class="dev-row' + (go ? ' go' : '') + '"' + (go ? ' href="http://' + escapeHtml(x.ip) + ':' + (x.port | 0) + '/"' : '') + '>' +
+      '<span class="dev-dot' + (st === true ? ' on' : '') + '"></span><div class="dev-main"><div class="dev-name">' + escapeHtml(label) +
+      '</div>' + (meta ? '<div class="dev-meta">' + escapeHtml(meta) + '</div>' : '') + (seen ? '<div class="dev-meta">' + escapeHtml(seen) + '</div>' : '') +
+      '</div><div class="dev-act">' + act + '</div></' + tag + '>';
+  });
+  if (list.length < 2) h += '<div class="dev-note">' + escapeHtml(DEV_T.only) + '</div>';
+  if (devData.updating) h += '<div class="dev-note">' + escapeHtml(DEV_T.updating) + '</div>';
+  p.innerHTML = h;
+}
+async function devForget(name) {
+  if (!confirm(gFmt(DEV_T.forget, {name: name}))) return;
+  await apiFetch('/devices/forget', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name})});
+  if (devData) devData.list = (devData.list || []).filter(x => x.name !== name);
+  devRender();
+  devMark();
+}
+
+function showUpdate(u) {
+  const el = document.getElementById('updateBanner');
+  if (!el) return;
+  if (!u || !u.on || !u.newer || !u.latest) { el.style.display = 'none'; return; }
+  const url = String(u.url || '');
+  const parts = String(G_T.update).split('{v}');
+  el.innerHTML = '<svg class="upd-ic" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 4.5 5 5h-3.2V17h-3.6v-5.5H7z" fill="currentColor"/></svg>' +
+    '<span class="upd-t">' + escapeHtml(parts[0]) + '<b>' + escapeHtml(u.latest) + '</b>' + escapeHtml(parts.slice(1).join('')) + '</span>' +
+    (url.indexOf('https://github.com/') === 0 ? '<a class="upd-btn" href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(G_T.updateLink) + '</a>' : '');
+  el.style.display = '';
+}
+
+async function loadGames() {
+  const d = await apiFetch('/games');
+  if (!d || !d.success) return;
+  gamesData = d;
+  gamesHist = {};
+  if (gamesSys && !d.systems.some(s => s.sys === gamesSys)) { gamesSys = null; gamesKey = null; }
+  renderGames();
+}
+
+function gamesToggle() { gamesOpen = !gamesOpen; renderGames(); }
+function gamesTop() { gamesSys = null; gamesKey = null; renderGames(); gScroll(); }
+function gamesPickSys(i) { gamesSys = gamesData.systems[i].sys; gamesKey = null; renderGames(); gScroll(); }
+function gamesPickGame(i) { gamesKey = gSys().games[i].key; renderGames(); gScroll(); }
+function gamesBackSys() { gamesKey = null; renderGames(); gScroll(); }
+// after moving to another level the page shows the block from its top
+function gScroll() {
+  const el = document.getElementById('gamesBox');
+  if (!el) return;
+  const top = el.getBoundingClientRect().top;
+  if (Math.abs(top) > 8) el.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+function gSys() { return (gamesData.systems.find(s => s.sys === gamesSys)) || {sys: gamesSys, games: []}; }
+
+function gHist(sys) {
+  const so = gamesData.systems.find(x => x.sys === sys) || {};
+  if (gamesData.hist_days === 0 || so.off || so.excluded) return {off: true, items: []};
+  if (!gamesHist[sys]) {
+    gamesHist[sys] = {loading: true, items: []};
+    apiFetch('/history?sys=' + encodeURIComponent(sys)).then(r => {
+      gamesHist[sys] = (r && r.success) ? {items: r.items || []} : {error: (r && r.error) || 'Error', items: []};
+      if (gamesSys === sys) renderGames();
+    });
+  }
+  return gamesHist[sys];
+}
+
+function gSysLine(s, short) {     // short: a tile - the brief status
+  const pend = s.games.filter(g => g.status === 'pending').length;
+  const newer = s.games.filter(g => g.status === 'newer' || g.status === 'cloud').length;
+  const open = s.games.filter(g => g.open && g.open.length).length;
+  const parts = [escapeHtml(gCount(s.games.length, G_T.games))];
+  if (s.excluded) return parts.join(' · ');   // its chip says it
+  if (s.off) return parts.concat([gSt('off', G_T.st_off)]).join(' · ');
+  if (open) parts.push(gSt('warn', gFmt(short ? G_T.sumOpenShort : G_T.sumOpen, {n: open})));
+  if (pend) parts.push(gSt('pending', gFmt(short ? G_T.tilePending : G_T.sumPending, {n: pend})));
+  if (newer) parts.push(gSt('newer', gFmt(short ? G_T.tileNewer : G_T.sumNewer, {n: newer})));
+  if (!open && !pend && !newer) parts.push(gSt('ok', G_T.sumOk));
+  return parts.join(' · ');
+}
+
+// games left open on other devices: a block like the conflicts one, above it
+let openHintOpen = false;
+function openRender() {
+  const box = document.getElementById('openBox');
+  const m = (gamesData && gamesData.marks) || [];
+  if (!m.length) { box.style.display = 'none'; return; }
+  document.getElementById('openHead').textContent = G_T.openTitle;
+  document.getElementById('openCount').textContent = m.length;
+  const devs = new Set(m.map(x => x.dev)).size;
+  document.getElementById('openHint').innerHTML = escapeHtml(devs > 1 ? G_T.openShortN : G_T.openShort1) +
+    '<button type="button" class="cf-more" onclick="openHintOpen = !openHintOpen; openRender()">' + escapeHtml(openHintOpen ? CONF_T.less : CONF_T.more) + '</button>' +
+    (openHintOpen ? '<span class="cf-long">' + escapeHtml(G_T.openHint) + '</span>' : '');
+  document.getElementById('openList').innerHTML = m.map(x => '<div class="conflict-row"><div class="conflict-info">' +
+    '<div class="conflict-file">' + escapeHtml(x.name) + '</div>' +
+    (x.sys ? '<div class="cf-chips"><span class="cf-chip">' + escapeHtml(x.sys) + '</span></div>' : '') +
+    '<div class="conflict-meta">' + escapeHtml(gFmt(G_T.openWhere, {dev: x.dev, time: x.time})) + '</div></div></div>').join('');
+  box.style.display = '';
+}
+
+function renderGames() {
+  const box = document.getElementById('gamesBox');
+  const d = gamesData;
+  openRender();
+  // the block stays (its sync buttons); the games part appears when the list is there
+  document.getElementById('gamesSum').style.display = d ? '' : 'none';
+  document.getElementById('gamesBody').style.display = d ? '' : 'none';
+  if (!d) return;
+  document.getElementById('gamesTitle').textContent = G_T.title;
+  const all = d.systems.reduce((n, s) => n + s.games.length, 0);
+  const pend = d.systems.reduce((n, s) => n + s.games.filter(g => g.status === 'pending').length, 0);
+  const sum = [gFmt(G_T.sumGames, {n: all})];
+  if (pend) sum.push(gFmt(G_T.sumPending, {n: pend}));
+  if (d.marks.length) sum.push(gFmt(G_T.sumOpenShort, {n: d.marks.length}));
+  // the totals as the numbers of the ROM operations: a chip each, the number in bold
+  // (on a phone small tiles, the number above its label)
+  const chip = (fmt, n, cls) => {
+    let label = fmt.split('{n}').join('').trim();
+    if (label.endsWith(':')) label = label.slice(0, -1).trim();
+    return '<span class="chip' + (cls ? ' ' + cls : '') + '">' + escapeHtml(label.charAt(0).toUpperCase() + label.slice(1)) + ' <b>' + n + '</b></span>';
+  };
+  const parts = [chip(G_T.sumGames, all)];
+  if (pend) parts.push(chip(G_T.sumPending, pend, 'warn'));
+  if (d.marks.length) parts.push(chip(G_T.sumOpenShort, d.marks.length, 'warn'));
+  // the excluded systems next to the totals (the top panel has no tile for them)
+  const exN = ((window._sysData || {}).excluded || []).length;
+  if (exN) parts.push(chip(G_T.exclCount, exN, 'ex'));
+  document.getElementById('gamesSum').innerHTML = parts.join('');
+  // the list of systems: "Clear exclusions" next to List / Tiles (as Select all ... in the ROMs)
+  window._gClear = exN ? '<button type="button" class="btn gs-clear" onclick="excludeAction(&#39;clear&#39;)">' + G_CLEAR_ICON + escapeHtml(G_T.exclClear) + '</button>' : '';
+  const body = document.getElementById('gamesBody');
+  // a system or a game open: only its saves (the sync buttons are back on the list of systems)
+  box.classList.toggle('saves-open', gamesSys !== null || gamesKey !== null);
+  body.innerHTML = gamesKey !== null ? gGameView() : gamesSys !== null ? gSysView() : gTopView();
+}
+
+const G_CLEAR_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:4px"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="2"/><path d="M6 18L18 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+function gTopView() {
+  const d = gamesData;
+  const head = d.systems.length ? '<div class="roms-head g-tophead"><div class="roms-ctl">' + (window._gClear || '') + '</div>' +
+    '<div class="g-topviews">' + gViews() + '</div></div>' : '';      // one list / tiles choice for systems and games
+  const wrap = x => head + x;      // the list of systems is shown whole; the games of a system scroll in their block
+  let h = '';
+  if (!d.systems.length) return wrap(h + '<div class="g-note">' + escapeHtml(G_T.empty) + '</div>' + gOthers());
+  const order = d.systems.map((s, i) => ({s: s, i: i})).sort((a, b) => (a.s.excluded ? 1 : 0) - (b.s.excluded ? 1 : 0));
+  if (gamesView === 'tiles') {
+    return wrap(h + '<div class="g-systiles">' + order.map(o =>
+      '<div class="g-systile' + (o.s.excluded ? ' excl' : '') + '" onclick="gamesPickSys(' + o.i + ')"><div class="g-systile-name">' + escapeHtml(o.s.sys.toUpperCase()) +
+      '</div><div class="g-meta">' + gSysLine(o.s, true).split(' · ').map(x => '<span>' + x + '</span>').join('') + '</div>' + gSysChip(o) + '</div>').join('') + '</div>' + gOthers());
+  }
+  return wrap(h + '<div class="g-list cols">' + order.map(o =>
+    '<div class="g-row g-sysrow' + (o.s.excluded ? ' excl' : '') + '" onclick="gamesPickSys(' + o.i + ')"><div class="g-main"><div class="g-name">' + escapeHtml(o.s.sys.toUpperCase()) +
+    '</div><div class="g-meta">' + gSysLine(o.s) + '</div>' + gSysChip(o) + '</div><span class="g-arrow">›</span></div>').join('') + '</div>' + gOthers());
+}
+
+// under the systems: how many are excluded, and the systems without saves here (from the
+// systems list of the ROM tab: games here, only in the cloud, PortMaster) with the same switch
+let gamesOthersOpen = false;
+function gOthers() {
+  const sd = window._sysData;
+  if (!sd) return '';
+  const ex = sd.excluded || [];
+  let h = '';
+  // (the number of excluded systems is in the totals line above)
+  const shown = new Set(gamesData.systems.map(x => x.sys));
+  const hasPorts = (sd.port_saves || []).length > 0;
+  const all = (sd.all || []).concat(sd.saves_cloud || []).concat((hasPorts || sd.port_saves_cloud) ? ['PortMaster'] : []);
+  const list = all.filter((x, i) => all.indexOf(x) === i && !shown.has(x)).sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : 1);
+  window._gOthers = list;
+  if (!list.length && !sd.cloud_error) return h;
+  const tiles = gamesView === 'tiles';
+  const rows = list.map((x, i) => {
+    const isEx = ex.includes(x);
+    const cloud = (sd.cloud_only || []).includes(x) || (sd.saves_cloud || []).includes(x) || (x === 'PortMaster' && !hasPorts);
+    const name = escapeHtml(x === 'PortMaster' ? x : x.toUpperCase());
+    const tag = cloud ? '<span class="tg">' + escapeHtml(G_T.onlyCloud) + '</span>' : '';
+    const chip = '<button type="button" class="g-chip' + (isEx ? ' x' : '') + '" onclick="gOtherToggle(' + i + ')">' + escapeHtml(isEx ? G_T.chipExcl : G_T.chipSync) + '</button>';
+    return tiles ? '<div class="g-systile o' + (isEx ? ' excl' : '') + '"><div class="g-systile-name">' + name + '</div>' + tag + chip + '</div>'
+      : '<div class="g-orow"><span class="nm">' + name + '</span>' + tag + chip + '</div>';
+  }).join('');
+  // shown open: a part of the list, not an option
+  return h + '<div class="g-others"><div class="g-others-t">' +
+    escapeHtml(gFmt(G_T.others, {n: list.length})) + '</div><div class="g-note">' + escapeHtml(G_T.othersHint) + '</div>' +
+    (sd.cloud_error ? '<div class="g-note">' + escapeHtml(G_T.cloudErr) + '</div>' : '') +
+    (tiles ? '<div class="g-systiles">' + rows + '</div>' : '<div class="g-olist cols">' + rows + '</div>') + '</div>';
+}
+function gOtherToggle(i) {
+  const x = (window._gOthers || [])[i];
+  if (!x || !window._sysData) return;
+  excludeAction((window._sysData.excluded || []).includes(x) ? 'remove' : 'add', x);
+}
+// Sync / Excluded on a system: a tap switches it, the system itself opens by a tap elsewhere
+function gSysChip(o) {
+  return '<button type="button" class="g-chip' + (o.s.excluded ? ' x' : '') + '" onclick="event.stopPropagation(); gSysToggle(' + o.i + ')">' +
+    escapeHtml(o.s.excluded ? G_T.chipExcl : G_T.chipSync) + '</button>';
+}
+function gSysToggle(i) {
+  const s = gamesData.systems[i];
+  if (s) excludeAction(s.excluded ? 'remove' : 'add', s.sys);
+}
+function gSysSwitch(s) {
+  const ex = !!s.excluded;
+  return '<div class="g-sw"><div class="cat-views">' +
+    '<button type="button" class="' + (ex ? '' : 'on') + '" onclick="' + (ex ? 'excludeAction(&#39;remove&#39;, gamesSys)' : '') + '">' + escapeHtml(G_T.swSync) + '</button>' +
+    '<button type="button" class="' + (ex ? 'on x' : '') + '" onclick="' + (ex ? '' : 'excludeAction(&#39;add&#39;, gamesSys)') + '">' + escapeHtml(G_T.swExcl) + '</button></div></div>';
+}
+
+function gVersionsOf(key) {
+  const hs = gHist(gamesSys);
+  return (hs.items || []).filter(v => String(v.key).toLowerCase() === String(key).toLowerCase());
+}
+
+// the back arrow: a drawn one, the same size and height as the text on every phone
+const G_IC_CLOUD = '<svg class="g-ic g-ic-cloud" width="1.55em" height="1em" viewBox="-192 -123 1664 1068" aria-hidden="true"><g transform="translate(0,822) scale(0.1,-0.1)" fill="currentColor"><path d="M7121 8205 c-484 -56 -926 -221 -1315 -494 -238 -166 -476 -397 -637 -618 -23 -32 -44 -60 -45 -62 -2 -2 -40 8 -84 23 -117 38 -260 73 -385 92 -150 23 -442 23 -590 0 -611 -94 -1127 -423 -1468 -934 -235 -353 -362 -809 -344 -1229 l6 -132 -32 -5 c-18 -3 -72 -10 -122 -16 -413 -50 -861 -242 -1201 -515 -434 -349 -738 -846 -852 -1395 -38 -183 -47 -272 -46 -495 0 -243 14 -368 63 -571 221 -899 936 -1599 1835 -1794 268 -58 -2 -55 4336 -55 3806 0 4011 1 4125 18 649 97 1197 373 1635 824 142 145 217 237 324 396 233 346 381 728 448 1162 18 116 22 183 22 395 0 282 -16 420 -74 657 -180 738 -643 1363 -1298 1752 -333 198 -715 326 -1104 371 -117 14 -118 14 -118 89 0 95 -59 403 -107 556 -75 243 -205 524 -331 715 -452 687 -1140 1129 -1947 1250 -185 28 -520 35 -694 15z"/></g><path d="M430 450 L590 600 L880 300" fill="none" style="stroke:var(--ic-hole,var(--bg-card))" stroke-width="110" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const G_IC_DEVICE = '<svg class="g-ic g-ic-dev" width="1.15em" height="1.15em" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="1.5" width="14" height="21" rx="2.6" fill="currentColor"/><rect x="7.2" y="3.7" width="9.6" height="8.3" rx="1" style="fill:var(--ic-hole,var(--bg-card))"/><path d="M9.4 8l1.7 1.7 3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 16.6h3M9.5 15.1v3" style="stroke:var(--ic-hole,var(--bg-card))" stroke-width="1.4" stroke-linecap="round"/><circle cx="15.3" cy="15.4" r="1" style="fill:var(--ic-hole,var(--bg-card))"/><circle cx="13.6" cy="17.6" r="1" style="fill:var(--ic-hole,var(--bg-card))"/></svg>';
+const G_IC_SAVE = '<svg class="g-ic g-ic-save" width="13" height="13" viewBox="-6 -6 36 36" fill="none" aria-hidden="true"><path d="M19,0H1C0.448,0,0,0.448,0,1v22c0,0.552,0.448,1,1,1h22c0.552,0,1-0.448,1-1V5L19,0z M6,3c0-0.552,0.448-1,1-1h10 c0.552,0,1,0.448,1,1v6c0,0.552-0.448,1-1,1H7c-0.552,0-1-0.448-1-1V3z M20,22H4v-7c0-0.552,0.448-1,1-1h14c0.552,0,1,0.448,1,1V22 z" fill="currentColor"/><path d="M16,9h-4V3h4V9z" fill="currentColor"/></svg>';
+const G_IC_HIST = '<svg class="g-ic g-ic-hist" width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z" fill="currentColor"/></svg>';
+const G_IC_STATE = '<svg class="g-ic g-ic-state" width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M11 21h-1l1-7H7.5c-.58 0-.57-.32-.38-.66.19-.34.05-.08.07-.12C8.48 10.94 10.42 7.54 13 3h1l-1 7h3.5c.49 0 .56.33.47.51l-.07.15C12.96 17.55 11 21 11 21z" fill="currentColor"/></svg>';
+const G_ARROW = '<svg class="g-arr" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12H5M11 5l-7 7 7 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+let gamesView = 'list';
+try { const v = localStorage.getItem('ss_games_view'); if (v === 'list' || v === 'tiles') gamesView = v; } catch (e) { /* private window */ }
+function gamesSetView(v) {
+  gamesView = v;
+  try { localStorage.setItem('ss_games_view', v); } catch (e) { /* private window */ }
+  renderGames();
+  if (typeof romsRender === 'function') romsRender();      // the ROM systems: the same choice
+}
+
+// the cover from the device (gamelist.xml), over a coloured placeholder like in the catalog
+// a cover picture loaded: it fills the cover by its longer side (a small one is scaled up too)
+document.addEventListener('load', e => {
+  const im = e.target;
+  if (!im || im.tagName !== 'IMG' || !im.parentNode || !im.parentNode.classList || !im.parentNode.classList.contains('cat-cov')) return;
+  const box = im.parentNode;
+  if (!im.naturalWidth || !box.clientHeight) return;
+  const wide = im.naturalWidth / im.naturalHeight > box.clientWidth / box.clientHeight;
+  im.classList.toggle('cov-w', wide);
+  im.classList.toggle('cov-h', !wide);
+}, true);
+
+function gCover(g, cls) {
+  const img = g.img ? '<img src="' + API + '/link/catalog_local?dir=' + encodeURIComponent(g.img.dir) + '&path=' +
+    encodeURIComponent(g.img.path) + '&thumb=1&v=' + encodeURIComponent(g.img.v || '') + '" alt="" loading="lazy" onerror="this.remove()">' : '';
+  return '<div class="cat-cov ' + (cls || '') + '" style="background:' + catTint(g.name) + '">' + img + '</div>';
+}
+
+function gViews(cur, fn) {
+  cur = cur || gamesView; fn = fn || 'gamesSetView';
+  return '<div class="cat-views">' + ['list', 'tiles'].map(v => '<button type="button" class="' + (cur === v ? 'on' : '') +
+    '" onclick="' + fn + '(&#39;' + v + '&#39;)">' + escapeHtml(v === 'list' ? G_T.viewList : G_T.viewTiles) + '</button>').join('') + '</div>';
+}
+
+
+function gTileBadges(g, hs) {      // a tile: status, "left open", saves and previous versions as badges on the cover
+  const text = G_T['st_' + g.status] || '';
+  const sym = text.match(/^([^ ]+) /);
+  let st;
+  if (g.status === 'ok') st = G_IC_CLOUD;
+  else if (sym && !/[a-zа-яё]/i.test(sym[1])) st = escapeHtml(sym[1]);
+  else st = escapeHtml(text);
+  let h = '<span class="g-tb ' + g.status + '" title="' + escapeHtml(text) + '">' + st + '</span>';
+  if ((g.open || []).length) h += '<span class="g-tb warn" title="' + escapeHtml(gFmt(G_T.openGame, {dev: g.open[0].dev, time: g.open[0].time})) + '">⚠</span>';
+  const n = (g.saves || 0) + (g.states || 0);
+  const v = hs.items ? gVersionsOf(g.key).length : 0;
+  if (n) h += '<span class="g-tb saves" title="' + gSavesN(g) + '">' + G_IC_SAVE + n + '</span>';
+  if (v) h += '<span class="g-tb hist" title="' + escapeHtml(G_T.prev + ': ' + v) + '">' + G_IC_HIST + v + '</span>';
+  return '<div class="g-tbadges">' + h + '</div>';
+}
+
+function gItem(g, i, hs) {
+  if (gamesView === 'tiles') {
+    return '<div class="cat-tile" onclick="gamesPickGame(' + i + ')">' + gCover(g) + gTileBadges(g, hs) +
+      (g.rom === false ? '<span class="g-norom g-tile-norom">' + escapeHtml(G_T.noRom) + '</span>' : '') +
+      '<div class="cat-tile-name">' + escapeHtml(g.name) + '</div></div>';
+  }
+  const meta = [gSt(g.status, G_T['st_' + g.status])];
+  if (gSavesN(g)) meta.push('<span class="g-icn">' + G_IC_SAVE + gSavesN(g) + '</span>');
+  if (g.dev && g.time) meta.push(escapeHtml(gFmt(G_T.last, {dev: g.dev, time: g.time})));
+  const n = hs.items ? gVersionsOf(g.key).length : 0;
+  if (n) meta.push('<span class="g-icn">' + G_IC_HIST + escapeHtml(G_T.prev.toLowerCase() + ': ' + n) + '</span>');
+  const open = (g.open || []).map(o => '<div class="g-open">' + escapeHtml(gFmt(G_T.openGame, {dev: o.dev, time: o.time})) + '</div>').join('');
+  return '<div class="g-row" onclick="gamesPickGame(' + i + ')">' + gCover(g, 'g-cov') + '<div class="g-main"><div class="g-name">' + escapeHtml(g.name) +
+    '</div>' + (g.rom === false ? '<span class="g-norom">' + escapeHtml(G_T.noRom) + '</span>' : '') +
+    '<div class="g-meta">' + meta.join(' · ') + '</div>' + open + '</div><span class="g-arrow">›</span></div>';
+}
+
+function gSysView() {
+  const s = gSys();
+  const hs = gHist(s.sys);
+  let h = '<div class="cat-head"><button type="button" class="btn cat-back g-backbtn" onclick="gamesTop()">' + G_ARROW + escapeHtml(G_T.back) + '</button>' +
+    '<div class="cat-title"><span class="cat-name">' + escapeHtml(s.sys.toUpperCase()) + '</span> <span class="cat-count">' +
+    escapeHtml(G_T.en ? gCount(s.games.length, G_T.games) : gFmt(G_T.gCount, {n: s.games.length})) + '</span></div>' + gViews() + '</div>';
+  if (s.excluded) h += '<div class="g-note">' + escapeHtml(G_T.exclHint) + '</div>';
+  else if (s.off) h += '<div class="g-note">' + escapeHtml(G_T.offHint) + '</div>';
+  if (hs.loading) h += '<div class="g-note">' + escapeHtml(G_T.loading) + '</div>';
+  else if (hs.error) h += '<div class="g-note">' + escapeHtml(hs.error) + '</div>';
+  // games whose ROM is not on this device: at the end, under their own heading
+  const away = s.games.filter(g => g.rom === false).length;
+  const here = s.games.length - away;
+  const sec = away ? '<div class="g-nogame-t">' + escapeHtml(gFmt(G_T.noRomSec, {n: away})) + '</div>' : '';
+  const part = (from, to) => s.games.slice(from, to).map((g, j) => gItem(g, from + j, hs)).join('');
+  const wrap = gamesView === 'tiles' ? '<div class="cat-tiles g-tiles">' : '<div class="g-list">';
+  h += '<div class="g-scroll">' + (here ? wrap + part(0, here) + '</div>' : '') + sec +
+    (away ? wrap + part(here, s.games.length) + '</div>' : '') + '</div>';
+  return h;
+}
+
+function gGameView() {
+  const s = gSys();
+  const g = s.games.find(x => x.key === gamesKey);
+  if (!g) { gamesKey = null; return gSysView(); }
+  const hs = gHist(s.sys);
+  let h = '<div class="cat-head"><button type="button" class="btn cat-back g-backbtn" onclick="gamesBackSys()">' + G_ARROW +
+    escapeHtml(gFmt(G_T.backGames, {sys: s.sys.toUpperCase()})) + '</button><div class="cat-title"><span class="cat-name">' +
+    escapeHtml(g.name) + '</span></div></div>';
+  const chips = [];
+  if (g.saves) chips.push('<span class="g-icn">' + G_IC_SAVE + escapeHtml(gFmt(G_T.saves, {n: g.saves})) + '</span>');
+  if (g.states) chips.push('<span class="g-icn">' + G_IC_STATE + escapeHtml(gFmt(G_T.states, {n: g.states})) + '</span>');
+  const meta = [gSt(g.status, G_T['st_' + g.status])];
+  if (g.dev && g.time) meta.push(escapeHtml(gFmt(G_T.last, {dev: g.dev, time: g.time})));
+  h += '<div class="g-hero">' + gCover(g, 'g-cov-big') + '<div class="g-main">' +
+    '<div class="g-meta">' + meta.join(' · ') + '</div><div class="g-meta">' + chips.join(' · ') + '</div>' +
+    (g.rom === false ? '<div class="g-note">' + escapeHtml(G_T.noRomHint) + '</div>' : '') +
+    '<div class="g-actions"><button type="button" class="btn cf-del" onclick="gamesDelete()">' + escapeHtml(G_T.delSaves) + '</button></div>' +
+    (g.open || []).map(o => '<div class="g-open">' + escapeHtml(gFmt(G_T.openGame, {dev: o.dev, time: o.time})) + '</div>').join('') + '</div></div>';
+  if (s.excluded) return h + '<div class="g-note">' + escapeHtml(G_T.exclHint) + '</div>';
+  if (s.off) return h + '<div class="g-note">' + escapeHtml(G_T.offHint) + '</div>';
+  h += '<div class="g-sec">' + G_IC_HIST + escapeHtml(G_T.prev) + '</div>';
+  if (hs.off) return h + '<div class="g-note">' + escapeHtml(G_T.histOff) + '</div>';
+  if (hs.loading) return h + '<div class="g-note">' + escapeHtml(G_T.loading) + '</div>';
+  if (hs.error) return h + '<div class="g-note">' + escapeHtml(hs.error) + '</div>';
+  const vs = gVersionsOf(g.key);
+  window._gVers = vs;
+  h += '<div class="g-note">' + escapeHtml(gFmt(G_T.histHint, {days: gamesData.hist_days, count: gamesData.hist_count})) + '</div>';
+  if (!vs.length) return h + '<div class="g-note">' + escapeHtml(G_T.noPrev) + '</div>';
+  return h + '<div class="g-list g-vers">' + vs.map((v, i) => {
+    const file = String(v.file).split('/').pop();
+    const meta = [gFmt(v.deleted ? G_T.deleted : G_T.replaced, {dev: v.dev, time: v.time})];
+    if (gSize(v.size)) meta.push(gSize(v.size));
+    if (!v.synced) meta.push(G_T.notSynced);
+    return '<div class="g-row static"><div class="g-main"><div class="g-name">' + (v.state ? G_IC_STATE : G_IC_SAVE) + escapeHtml(v.state ? G_T.kindState : G_T.kindSave) +
+      '</div><div class="g-meta">' + escapeHtml(file) + '</div><div class="g-meta">' + escapeHtml(meta.join(' · ')) + '</div></div>' +
+      '<div class="g-btns"><button class="btn btn-primary" onclick="gamesRestore(' + i + ')"' + (v.synced ? '' : ' disabled') + '>' + escapeHtml(G_T.restore) + '</button>' +
+      '<button class="btn cf-del" onclick="gamesDropVersion(' + i + ')">' + escapeHtml(G_T.del) + '</button></div></div>';
+  }).join('') + '</div>';
+}
+
+// "Restore": both versions side by side - the one here now and the one that comes back
+function gamesRestore(i) {
+  const v = (window._gVers || [])[i];
+  if (!v) return;
+  const g = gSys().games.find(x => x.key === gamesKey) || {};
+  const cur = (g.files || {})[v.sub];
+  const col = (title, lines, cls) => '<div class="g-cmp-col ' + cls + '"><div class="g-cmp-h">' + escapeHtml(title) + '</div>' +
+    lines.filter(x => x).map(x => '<div>' + escapeHtml(x) + '</div>').join('') + '</div>';
+  const now = (cur && cur.here) ? [cur.dev || G_T.thisDev, cur.time, gSize(cur.size)] : [G_T.noFile];
+  const back = [v.dev, gFmt(v.deleted ? G_T.deletedShort : G_T.replacedShort, {time: v.time}), gSize(v.size)];
+  const html = '<div class="g-title">' + escapeHtml(g.name || v.file) + '</div>' +
+    '<div class="g-meta">' + escapeHtml((v.state ? G_T.kindState : G_T.kindSave) + ' · ' + String(v.file).split('/').pop()) + '</div>' +
+    '<div class="g-cmp">' + col(G_T.now, now, 'from') + col(G_T.to, back, 'to') + '</div>' +
+    '<div class="g-note">' + escapeHtml(G_T.restoreNote) + '</div>';
+  gModal(html, () => runSyncWithProgress('conflict_restore', () => apiFetch('/history/restore', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: v.id})
+  })));
+}
+
+// "Delete saves": the game's files here, by kind, or single files of a kind
+function gFileLabel(rel, state) {
+  const name = String(rel).split('/').pop();
+  if (!state) return name;
+  const low = name.toLowerCase(), i = low.lastIndexOf('.state');
+  const rest = i >= 0 ? low.slice(i + 6) : '';
+  if (rest === '' ) return gFmt(G_T.slot, {n: 0}) + ' · ' + name;
+  if (rest === '.auto') return G_T.slotAuto + ' · ' + name;
+  if (/^[0-9]+$/.test(rest)) return gFmt(G_T.slot, {n: rest}) + ' · ' + name;
+  return name;
+}
+
+function gDelKind(box, kind) {
+  document.querySelectorAll('#gModal .gDelF[data-kind="' + kind + '"]').forEach(x => { x.checked = box.checked; });
+}
+
+function gDelSync(kind) {
+  const all = Array.from(document.querySelectorAll('#gModal .gDelF[data-kind="' + kind + '"]'));
+  const box = document.getElementById(kind === 's' ? 'gDelSaves' : 'gDelStates');
+  if (!box) return;
+  const n = all.filter(x => x.checked).length;
+  box.checked = n === all.length;
+  box.indeterminate = n > 0 && n < all.length;
+}
+
+function gamesDelete() {
+  const g = gSys().games.find(x => x.key === gamesKey);
+  if (!g) return;
+  const files = Object.keys(g.files || {}).filter(r => g.files[r].here).sort();
+  const saves = files.filter(r => !g.files[r].state), states = files.filter(r => g.files[r].state);
+  if (!files.length) { gModal('<div class="g-title">' + escapeHtml(g.name) + '</div><div class="g-note">' + escapeHtml(G_T.delNotHere) + '</div>', () => true, 'OK'); return; }
+  window._gDel = files;
+  const group = (id, kind, label, list) => {
+    if (!list.length) return '';
+    const head = '<label class="g-opt"><input type="checkbox" id="' + id + '" checked onchange="gDelKind(this, ' + "'" + kind + "'" + ')"> ' +
+      escapeHtml(label + ' (' + list.length + ')') + '</label>';
+    const rows = list.map(r => {
+      const f = g.files[r];
+      return '<label class="g-opt"><input type="checkbox" class="gDelF" data-kind="' + kind + '" data-i="' + files.indexOf(r) + '" checked onchange="gDelSync(' + "'" + kind + "'" + ')"><span>' +
+        escapeHtml(gFileLabel(r, f.state)) + '<span class="g-meta">' + escapeHtml([f.time, gSize(f.size)].filter(x => x).join(' · ')) + '</span></span></label>';
+    }).join('');
+    // one file: nothing to pick; it is listed hidden so the choice reads the same way
+    return head + '<details class="g-files"' + (list.length > 1 ? '' : ' hidden') + '><summary>' + escapeHtml(G_T.pickFiles) + '</summary>' + rows + '</details>';
+  };
+  const off = !!(gSys().off || gSys().excluded);      // not synced here: deleted here only
+  const warn = off ? G_T.delWarnOff : gamesData.hist_days ? gFmt(G_T.delWarnHist, {days: gamesData.hist_days}) : G_T.delWarnNoHist;
+  const html = '<div class="g-title">' + escapeHtml(G_T.delTitle) + '</div><div class="g-meta">' + escapeHtml(g.name) + '</div>' +
+    group('gDelSaves', 's', G_T.optSaves, saves) + group('gDelStates', 'q', G_T.optStates, states) +
+    '<div class="g-note">' + escapeHtml(warn) + '</div><div class="g-note">' + escapeHtml(G_T.delRunning) + '</div>';
+  gModal(html, () => {
+    const pick = Array.from(document.querySelectorAll('#gModal .gDelF')).filter(x => x.checked).map(x => window._gDel[+x.dataset.i]);
+    if (!pick.length) return false;
+    if (off) {      // not synced here: deleted on this device only, no sync
+      apiFetch('/saves/delete', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({rels: pick})}).then(res => {
+        showToast(res.success ? G_T.delLocalDone : (res.error || 'Error'), res.success ? 'success' : 'error');
+        loadGames();
+      });
+      return true;
+    }
+    runSyncWithProgress('saves_delete', () => apiFetch('/saves/delete', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({rels: pick})
+    }));
+    return true;
+  }, G_T.del, true);
+}
+
+function gamesDropVersion(i) {
+  const v = (window._gVers || [])[i];
+  if (!v) return;
+  const html = '<div class="g-title">' + escapeHtml(G_T.vDelTitle) + '</div><div class="g-meta">' +
+    escapeHtml((v.state ? G_T.kindState : G_T.kindSave) + ' · ' + String(v.file).split('/').pop()) + '</div><div class="g-meta">' +
+    escapeHtml(gFmt(v.deleted ? G_T.deleted : G_T.replaced, {dev: v.dev, time: v.time})) + '</div><div class="g-note">' + escapeHtml(G_T.vDelNote) + '</div>';
+  gModal(html, () => {
+    apiFetch('/history/delete', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: v.id})}).then(res => {
+      showToast(res.success ? G_T.vDeleted : (res.error || 'Error'), res.success ? 'success' : 'error');
+      delete gamesHist[gamesSys];
+      renderGames();
+    });
+    return true;
+  }, G_T.del, true);
+}
+
+function gModal(html, onOk, okLabel, danger) {
+  let m = document.getElementById('gModal');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'gModal';
+    m.className = 'g-modal';
+    m.addEventListener('click', e => { if (e.target === m) gModalClose(); });
+    document.body.appendChild(m);
+  }
+  m.innerHTML = '<div class="g-modal-card" role="dialog" aria-modal="true">' + html + '<div class="g-modal-btns">' +
+    '<button type="button" class="btn" onclick="gModalClose()">' + escapeHtml(G_T.cancel) + '</button>' +
+    '<button type="button" class="btn ' + (danger ? 'cf-del' : 'btn-primary') + '" id="gModalOk">' + escapeHtml(okLabel || G_T.to) + '</button></div></div>';
+  m.style.display = 'flex';
+  document.getElementById('gModalOk').onclick = () => { if (onOk() !== false) gModalClose(); };
+}
+function gModalClose() { const m = document.getElementById('gModal'); if (m) m.style.display = 'none'; }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') gModalClose(); });
+
+
 loadTheme();
 loadSettings();        // загружаем настройки один раз при старте
 refreshStatus();
+devInit();
 refreshLogs();
 refreshStats();
 loadSystems();         // ЗАГРУЖАЕМ СИСТЕМЫ ПРИ СТАРТЕ
 loadConflicts();
+loadGames();
 
 // Автообновление (настройки НЕ обновляются)
 // ========== DOWNLOAD FROM A PUBLIC LINK ==========
@@ -13011,6 +16367,7 @@ const LINK_ICON_DIR = '<svg width="16" height="16" viewBox="0 0 24 24" fill="non
 const LINK_ICON_ZIP = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-2 6h-2v2h2v2h-2v2h-2v-2h2v-2h-2v-2h2v-2h-2V8h2v2h2v2z" fill="currentColor"/></svg>';
 const LINK_ICON_FILE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm-1 7V3.5L18.5 9H13z" fill="currentColor"/></svg>';
 let linkState = { url: '', service: '', root: null, stack: [], password: '', target: 'device', dests: {} };
+document.addEventListener('DOMContentLoaded', () => { const b = document.getElementById('linkStartBtn'); if (b) b.dataset.label = b.textContent; });
 
 function linkFmt(s, vars) {
     Object.keys(vars).forEach(k => { s = s.split('{' + k + '}').join(vars[k]); });
@@ -13042,6 +16399,7 @@ async function linkInit() {
 }
 
 function linkFillDests() {
+    setTimeout(romsDest, 0);
     const d = linkState.dests[linkState.target] || {};
     const cloud = linkState.target === 'cloud';
     const sel = document.getElementById('linkDest');
@@ -13082,7 +16440,11 @@ async function linkTargetChanged() {
     if (linkState.root) linkUpdateSummary();
 }
 
+let linkGen = 0;                        // raised by "clear": an answer for the link before it is dropped
+
 async function linkOpen() {
+    if (romsCat) romsClose(false);          // one catalog on the page: the ROM system is closed
+    const gen = linkGen;
     const url = document.getElementById('linkUrl').value.trim();
     if (!url) { showToast(LINK_T.enterUrl, 'error'); return; }
     const pw = document.getElementById('linkPw').value;
@@ -13099,6 +16461,7 @@ async function linkOpen() {
         body: JSON.stringify({ url: url, password: pw })
     });
     btn.disabled = false;
+    if (gen !== linkGen) return;            // cleared meanwhile
     if (res.need_password) {
         document.getElementById('linkPwRow').style.display = 'flex';
         linkSetStatus(pw ? res.error : LINK_T.needPw, true);
@@ -13184,12 +16547,36 @@ function linkSavedState() {
     return { on: at >= 0, at: at, plain: plain };
 }
 
+// the "×" in the link field: the field is emptied and the open link closed (a saved link stays saved)
+function linkClear(focus) {
+    linkGen++;
+    linkPendingCat = null;
+    document.getElementById('linkUrl').value = '';
+    document.getElementById('linkPw').value = '';
+    document.getElementById('linkPwRow').style.display = 'none';
+    document.getElementById('linkOpenBtn').disabled = false;
+    if (romsCat) { linkSavedRender(); return; }     // the ROM catalog uses the same block: it stays open
+    document.getElementById('linkBrowser').style.display = 'none';
+    document.getElementById('catOffer').style.display = 'none';
+    catState = null;
+    catShow(false);
+    linkSetStatus('', false);
+    linkState = { url: '', service: '', root: null, stack: [], password: '', direct: false,
+                  target: linkState.target, dests: linkState.dests || {}, probe: null, destManual: false };
+    linkSavedRender();
+    if (focus) document.getElementById('linkUrl').focus();
+}
+
 async function linkSavedOpen(i) {
     const l = linkSaved[i];
     if (!l) return;
+    // the saved link that is open now: a second tap closes it
+    if (!romsCat && linkSavedIsCur(l) && document.getElementById('linkBrowser').style.display !== 'none') { linkClear(); return; }
+    if (romsCat) romsClose(false);
     document.getElementById('linkUrl').value = l.url;
     document.getElementById('linkPw').value = '';
     linkPendingCat = { url: l.url, dir: l.dir || '' };
+    linkScrollTop();
     if (l.dir) {
         // a saved catalog: its saved list is shown at once, the collection is read meanwhile
         const res = await apiFetch('/link/catalog_cached', {
@@ -13257,7 +16644,7 @@ function linkRender() {
         if (i < linkState.stack.length - 1) {
             const a = document.createElement('a');
             a.textContent = label;
-            a.onclick = () => { linkState.stack = linkState.stack.slice(0, i + 1); linkRender(); };
+            a.onclick = () => { linkState.stack = linkState.stack.slice(0, i + 1); linkRender(); linkScrollTop(true); };
             crumbs.appendChild(a);
         } else {
             crumbs.appendChild(document.createTextNode(label));
@@ -13289,13 +16676,14 @@ function linkRender() {
             '<span class="link-meta" data-mi="' + idx + '">' + escapeHtml(meta) + '</span>';
         const cb = row.querySelector('input');
         if (cb) cb.onchange = linkUpdateSummary;
-        if (e.dir) row.querySelector('.link-name').onclick = () => { linkState.stack.push(e); linkRender(); };
+        if (e.dir) row.querySelector('.link-name').onclick = () => { linkState.stack.push(e); linkRender(); linkScrollTop(true); };
         else if (e.zip) row.querySelector('.link-name').onclick = () => linkOpenZip(e);
         list.appendChild(row);
     });
     catOfferUpdate(cur);
     linkHaveKey = '';
     linkUpdateSummary();
+    ssScrollAgain();
 }
 
 // A .zip is opened like a folder: only its list is read, the chosen files are
@@ -13313,6 +16701,7 @@ async function linkOpenZip(e) {
     }
     linkState.stack.push(e.view);
     linkRender();
+    linkScrollTop(true);
 }
 
 function linkInZip() { return linkState.stack.some(x => (x.path || '').endsWith('/')); }
@@ -13375,7 +16764,7 @@ async function linkMarkHave() {
         const el = list.querySelector('[data-mi="' + x.i + '"]');
         if (!el) return;
         if (!el.dataset.orig) el.dataset.orig = el.textContent;
-        el.innerHTML = '<span class="cat-have">' + escapeHtml(CAT_T.have) + '</span> · ' + escapeHtml(el.dataset.orig);
+        el.innerHTML = catHaveHtml() + ' · ' + escapeHtml(el.dataset.orig);
     });
 }
 
@@ -13471,6 +16860,12 @@ async function linkDownload() {
 
 function linkFinished(data) {
     const ok = !!data.success;
+    if (ok && romsCat) {
+        const c = romsCat;
+        // uploaded: the system is in the cloud now (the switch appears)
+        if (c.side === 'device' && romsData && !(romsData.in_cloud || []).includes(c.sys)) romsData.in_cloud = (romsData.in_cloud || []).concat([c.sys]);
+        setTimeout(() => { if (romsCat === c) romsOpen(c.sys, c.side); }, 2600);
+    }
     if (catState && ok) {
         if (linkState.target !== 'cloud') catState.games.forEach(g => { if (catState.sel.has(g.path)) g.have = true; });
         catState.sel.clear();
@@ -13496,7 +16891,13 @@ function linkFinished(data) {
 // A folder with gamelist.xml (EmulationStation) is shown as a list of games: names,
 // descriptions, covers. The chosen games are downloaded with only their own media and
 // added to gamelist.xml on the device.
-const CAT_T = {"found": "В «{name}» есть описание игр (gamelist.xml): их можно выбрать по списку с обложками.", "maybe": "Похоже на сборку игр в архиве: если внутри есть gamelist.xml, её можно открыть как каталог.", "open": "Открыть как каталог", "reading": "Читаю список игр… для больших сборок это может занять минуту.", "title": "{name} · игр: {n}", "count": "игр: {n}", "selectShown": "Выбрать показанные ({n})", "have": "✓ на устройстве", "noGames": "Ничего не найдено", "media": "Медиа:", "nothingSel": "Отметьте игры, которые нужно скачать", "selected": "Выбрано игр: {n} · игры {roms} + медиа {media} = {total}", "dest": "Игры, их медиа и записи в gamelist.xml будут добавлены в roms/{dest}", "destNone": "Выберите систему, куда положить игры", "recalboxNote": "На Recalbox после скачивания появится окно «Список игр изменён!» — нажмите «Обновить». Пункт меню «Обновить списки игр» для этого не используйте: он перезапишет описания.", "destCloud": "Игры, их медиа и записи в gamelist.xml будут добавлены в {dest}", "cloudVideo": "Видео попадёт на устройства, только если в ромах выбрано «Медиа: с видео»", "cloudMedia": "Медиа попадут на устройства, только если в ромах включено «Медиа»", "noMedia": "Медиа не выбраны: игры появятся без обложек", "loadingPic": "Загружаю картинку…", "noPic": "Нет картинки", "fromDevice": "С устройства", "fromLink": "Из сборки", "replaceMedia": "Заменить медиа", "replaceDesc": "Заменить описание", "replaceHint": "Для игр, которые уже есть на устройстве: медиа и описание из сборки заменят свои (название, «избранное» и число запусков останутся)", "replaceNote": "Для игр, которые уже есть на устройстве, будет заменено из сборки: {what}", "keepNote": "Для игр, которые уже есть на устройстве, их медиа и описание останутся, добавится только недостающее", "whatMedia": "медиа", "whatDesc": "описание", "picFailed": "Картинка не загрузилась", "shot": {"thumbnail": "Обложка", "boxart": "Обложка", "image": "Изображение", "screenshot": "Скриншот", "mix": "Коллаж", "titleshot": "Заставка", "fanart": "Фон"}, "video": "▶ Видео · {size}", "loadingVideo": "Загружаю видео…", "noVideo": "Видео не загрузилось", "genre": "Жанр", "players": "Игроков", "developer": "Разработчик", "publisher": "Издатель", "file": "Файл", "lang": "Язык", "region": "Регион", "allGenres": "Все жанры", "anyPlayers": "Игроки: все", "players1": "1 игрок", "playersN": "от {n} игроков", "hideHave": "Нет на устройстве", "onlySel": "Выбранные ({n})", "sorts": {"col": "Как в сборке", "name": "По названию", "yearAsc": "Сначала старые", "yearDesc": "Сначала новые", "sizeAsc": "Сначала маленькие", "sizeDesc": "Сначала большие"}, "markNew": "новое", "markChanged": "обновлено", "onlyNew": "Новое и обновлённое ({n})", "checking": "Показан сохранённый список. Проверяю обновления сборки…", "offline": "Сборка не ответила — показан сохранённый список, скачивание недоступно.", "waitCheck": "Дождитесь, пока сборка будет проверена", "more": "Показать ещё ({n})", "notShown": " (не показывается в EmulationStation)", "kinds": {"thumbnail": "Обложки", "image": "Изображение", "marquee": "Логотипы", "wheel": "Логотипы (wheel)", "boxart": "Обложки (доп.)", "boxback": "Задние обложки", "cartridge": "Картриджи", "titleshot": "Заставки", "screenshot": "Скриншоты", "fanart": "Фоны", "mix": "Коллажи", "map": "Карты", "bezel": "Рамки", "video": "Видео", "manual": "Руководства", "magazine": "Журналы"}};
+// "in the cloud" (ROMs on the device side): the cloud icon with a check, as in the saves
+function catHaveCloud() { return !!(RC_T.device && CAT_T.have === RC_T.device.have); }
+function catHaveHtml() {
+  if (catHaveCloud()) return '<span class="cat-have">' + G_IC_CLOUD + escapeHtml(CAT_T.have.replace(/^✓ */, '')) + '</span>';
+  return '<span class="cat-have">' + G_IC_DEVICE + escapeHtml(CAT_T.have.replace(/^✓ */, '')) + '</span>';     // "on the device": the handheld with a check
+}
+const CAT_T = {"found": "В «{name}» есть описание игр (gamelist.xml): их можно выбрать по списку с обложками.", "maybe": "Похоже на сборник игр в архиве: если внутри есть gamelist.xml, его можно открыть как каталог.", "open": "Открыть как каталог", "reading": "Читаю список игр… при большом количестве игр это может занять минуту.", "title": "{name} · игр: {n}", "count": "игр: {n}", "selectShown": "Выбрать показанные ({n})", "have": "✓ на устройстве", "noGames": "Ничего не найдено", "media": "Медиа:", "nothingSel": "Отметьте игры, которые нужно скачать", "selected": "Выбрано игр: {n} · игры {roms} + медиа {media} = {total}", "dest": "Игры, их медиа и записи в gamelist.xml будут добавлены в roms/{dest}", "destNone": "Выберите систему, куда положить игры", "recalboxNote": "На Recalbox после скачивания появится окно «Список игр изменён!» — нажмите «Обновить». Пункт меню «Обновить списки игр» для этого не используйте: он перезапишет описания.", "destCloud": "Игры, их медиа и записи в gamelist.xml будут добавлены в {dest}", "cloudVideo": "Видео попадёт на устройства, только если в ромах выбрано «Медиа: с видео»", "cloudMedia": "Медиа попадут на устройства, только если в ромах включено «Медиа»", "noMedia": "Медиа не выбраны: игры появятся без обложек", "loadingPic": "Загружаю картинку…", "noPic": "Нет картинки", "fromDevice": "Устройство", "fromLink": "Сборник", "replaceMedia": "Заменить медиа", "replaceDesc": "Заменить описание", "replaceHint": "Для игр, которые уже есть на устройстве: медиа и описание из сборника заменят свои (название, «избранное» и число запусков останутся)", "replaceNote": "Для игр, которые уже есть на устройстве, будет заменено из сборника: {what}", "keepNote": "Для игр, которые уже есть на устройстве, их медиа и описание останутся, добавится только недостающее", "whatMedia": "медиа", "whatDesc": "описание", "picFailed": "Картинка не загрузилась", "shot": {"thumbnail": "Обложка", "boxart": "Обложка", "image": "Изображение", "screenshot": "Скриншот", "mix": "Коллаж", "titleshot": "Заставка", "fanart": "Фон"}, "video": "▶ Видео · {size}", "loadingVideo": "Загружаю видео…", "noVideo": "Видео не загрузилось", "genre": "Жанр", "players": "Игроков", "developer": "Разработчик", "publisher": "Издатель", "file": "Файл", "lang": "Язык", "region": "Регион", "allGenres": "Все жанры", "anyPlayers": "Игроки: все", "players1": "1 игрок", "playersN": "от {n} игроков", "hideHave": "Нет на устройстве", "onlySel": "Выбранные ({n})", "sorts": {"col": "Как в сборнике", "name": "По названию", "yearAsc": "Сначала старые", "yearDesc": "Сначала новые", "sizeAsc": "Сначала маленькие", "sizeDesc": "Сначала большие"}, "markNew": "новое", "markChanged": "обновлено", "onlyNew": "Новое и обновлённое ({n})", "checking": "Показан сохранённый список. Проверяю обновления сборника…", "offline": "Сборник не ответил — показан сохранённый список, скачивание недоступно.", "waitCheck": "Дождитесь, пока сборник будет проверен", "more": "Показать ещё ({n})", "notShown": " (не показывается в EmulationStation)", "kinds": {"thumbnail": "Обложки", "image": "Изображение", "marquee": "Логотипы", "wheel": "Логотипы (wheel)", "boxart": "Обложки (доп.)", "boxback": "Задние обложки", "cartridge": "Картриджи", "titleshot": "Заставки", "screenshot": "Скриншоты", "fanart": "Фоны", "mix": "Коллажи", "map": "Карты", "bezel": "Рамки", "video": "Видео", "manual": "Руководства", "magazine": "Журналы"}};
 const CAT_SKIP = ['media', 'images', 'videos', 'manuals', 'downloaded_images', 'downloaded_videos'];
 const CAT_KIND_ORDER = ['thumbnail', 'image', 'marquee', 'wheel', 'boxart', 'screenshot', 'titleshot', 'mix',
                         'cartridge', 'fanart', 'boxback', 'bezel', 'map', 'video', 'manual', 'magazine'];
@@ -13514,6 +16915,7 @@ let catOfferPath = null;
 
 function catShow(on) {
     document.getElementById('catBox').style.display = on ? 'block' : 'none';
+    document.getElementById('romsHost').classList.toggle('cat-on', !!on);       // the view switch in the ROM head
     document.getElementById('linkList').style.display = on ? 'none' : '';
     if (on) {
         document.getElementById('linkUnpackRow').style.display = 'none';
@@ -13561,7 +16963,7 @@ function catOfferUpdate(cur) {
     box.style.display = catOfferPath === null ? 'none' : 'flex';
 }
 
-function catOpenFromOffer() { if (catOfferPath !== null) catOpen(catOfferPath); }
+function catOpenFromOffer() { if (catOfferPath !== null) { catOpen(catOfferPath); linkScrollTop(); } }
 
 // A collection packed into one big zip (archive.org): look for gamelist.xml inside it
 // quietly - the offer appears only when there really is one.
@@ -13670,6 +17072,7 @@ function catApply(res, prev) {
     catRenderKinds();
     catRender();
     linkSavedRender();
+    ssScrollAgain();
 }
 
 function catClose() {
@@ -13894,6 +17297,8 @@ function catRender() {
     const shown = catShown();
     // the name of the collection and, small, the number of games (it does not break the name)
     document.getElementById('catTitle').innerHTML = '<span class="cat-name">' + escapeHtml(catState.title) + '</span> <span class="cat-count">' + escapeHtml(linkFmt(CAT_T.count, { n: catState.games.length })) + '</span>';
+    const rt = romsCat && document.querySelector('#romsCatHead .cat-title');      // a ROM system: the number next to its name
+    if (rt) rt.innerHTML = '<span class="cat-name">' + escapeHtml(romsCat.sys.toUpperCase()) + '</span> <span class="cat-count">' + escapeHtml(linkFmt(CAT_T.count, { n: catState.games.length })) + '</span>';
     const list = document.getElementById('catList');
     const view = catView;
     list.className = 'link-list cat-list' + (view === 'list' ? '' : ' cat-' + view);
@@ -13911,18 +17316,18 @@ function catRender() {
         const box = '<input type="checkbox" data-gi="' + i + '"' + (catState.sel.has(g.path) ? ' checked' : '') + '>';
         if (view === 'grid') {
             rows.push('<div class="cat-tile cat-go' + (catState.open === i ? ' open' : '') + '" data-go="' + i + '">' + catCoverHtml(g, i) + box +
-                (g.have ? '<span class="cat-tile-have" title="' + escapeHtml(CAT_T.have) + '">✓</span>' : '') +
+                (g.have ? '<span class="cat-tile-have" title="' + escapeHtml(CAT_T.have.replace(/^✓ */, '')) + '">' + (catHaveCloud() ? G_IC_CLOUD : G_IC_DEVICE) + '</span>' : '') +
                 '<div class="cat-tile-name" title="' + escapeHtml(g.file || g.name) + '">' + escapeHtml(g.name) + '</div>' +
                 '<div class="cat-tile-meta">' + mark + escapeHtml(meta) + '</div></div>');
         } else {
             const text = '<span class="link-name dir" title="' + escapeHtml(g.file || g.name) + '">' + escapeHtml(g.name) + '</span>' +
-                '<span class="link-meta">' + mark + (g.have ? '<span class="cat-have">' + escapeHtml(CAT_T.have) + '</span> · ' : '') + escapeHtml(meta) + '</span>';
+                '<span class="link-meta">' + mark + (g.have ? catHaveHtml() + ' · ' : '') + escapeHtml(meta) + '</span>';
             if (view === 'covers') {
                 const d = catRowData(g);
                 const info = [d.year, formatBytes(g.size), d.genre, d.players ? CAT_T.players + ': ' + d.players : ''].filter(Boolean).join(' · ');
                 rows.push('<div class="link-row cat-go' + (catState.open === i ? ' cat-open' : '') + '" data-go="' + i + '">' + box + catCoverHtml(g, i) + '<div class="cat-rt">' +
                     '<span class="link-name dir" title="' + escapeHtml(g.file || g.name) + '">' + escapeHtml(g.name) + '</span>' +
-                    '<div class="cat-rt-meta">' + mark + (g.have ? '<span class="cat-have">' + escapeHtml(CAT_T.have) + '</span> · ' : '') + escapeHtml(info) + '</div>' +
+                    '<div class="cat-rt-meta">' + mark + (g.have ? catHaveHtml() + ' · ' : '') + escapeHtml(info) + '</div>' +
                     (d.desc ? '<div class="cat-rt-desc">' + escapeHtml(d.desc) + '</div>' : '') + '</div></div>');
             } else {
                 rows.push('<div class="link-row cat-go' + (catState.open === i ? ' cat-open' : '') + '" data-go="' + i + '">' + box + text + '</div>');
@@ -14175,6 +17580,7 @@ function catDevInfo(g) {
 
 // the device has an entry for the game (pictures, video or a description)
 function catDevHas(g) {
+    if (romsCat && romsCat.side === 'device') return false;     // the source is this device itself: nothing else to compare with
     const dev = catDevReady(g);
     return !!dev && (Object.keys(dev).length > 0 || !!catDevInfo(g));
 }
@@ -14536,7 +17942,7 @@ async function postSections() {
 
 // ---- export / import of the settings
 const CFG_T = {"title": "Перенос настроек", "export": "Экспорт", "import": "Импорт", "hint": "Экспорт скачивает файл настроек этого устройства (sync.conf), импорт берёт из такого файла только то, что вы отметите. Подключения к облаку в нём нет.", "choose": "Что взять из «{name}»:", "apply": "Импорт", "cancel": "Отмена", "groups": {"links": "Сохранённые ссылки ({n}): добавятся к уже сохранённым", "sync": "Синхронизация: интервал, попытки, копии при конфликтах, уведомления, после игры", "excluded": "Исключения", "roms": "Системы ромов и медиа", "web": "Разделы веб-интерфейса"}, "notFile": "Это не файл настроек Save Sync", "done": "Импортировано: настроек {s}, новых ссылок {l}", "nothing": "Отметьте, что импортировать"};
-const CFG_GROUPS = { links: ['WEB_LINKS'], sync: ['SYNC_INTERVAL', 'MAX_RETRIES', 'CONFLICT_KEEP_DAYS', 'NOTIFICATIONS', 'SYNC_MODE', 'MIN_FREE_KB'],
+const CFG_GROUPS = { links: ['WEB_LINKS'], sync: ['SYNC_INTERVAL', 'MAX_RETRIES', 'CONFLICT_KEEP_DAYS', 'NOTIFICATIONS', 'SYNC_STATES', 'HISTORY_KEEP_DAYS', 'HISTORY_KEEP_COUNT', 'UPDATE_CHECK', 'SYNC_MODE', 'MIN_FREE_KB'],
                      excluded: ['EXCLUDED_SYSTEMS'], roms: ['ROMS_SYNC_DIRS', 'ROMS_SYNC_MEDIA'], web: ['WEB_SHOW_ROMS', 'WEB_SHOW_LINK'] };
 // device dependent groups are not ticked at first
 const CFG_ON = ['links', 'sync'];
@@ -14632,6 +18038,34 @@ class QuietHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
             return
         super().handle_error(request, client_address)
 
+def device_name_here():
+    try:
+        return Handler._state_get(Handler.__new__(Handler), "DEVICE_NAME") or ""
+    except Exception:
+        return ""
+
+
+def devices_announcer(port):
+    """The record of this device in the cloud: written when the web interface starts (as soon as
+    the cloud answers), then every 15 minutes while it runs (the list shows when a device was
+    last on; a new address is written with it)."""
+    def run():
+        h = Handler.__new__(Handler)
+        wait = 30
+        while True:
+            try:
+                r = h._engine(["devices", "announce", str(port), h.system_label()], 180)
+                ok = r.returncode == 0
+            except Exception:
+                ok = False
+            if ok:
+                wait = 15 * 60
+            else:
+                wait = 60 if wait < 600 else 600   # no network yet (just switched on) or no cloud
+            time.sleep(wait)
+    threading.Thread(target=run, daemon=True).start()
+
+
 if __name__ == "__main__":
     ip = "0.0.0.0"
     port = 8080
@@ -14645,11 +18079,12 @@ if __name__ == "__main__":
     except:
         ip_addr = 'localhost'
     
-    print(f"\n✅ Save Sync Web UI v1.5.0 запущен")
+    print(f"\n✅ Save Sync Web UI v1.6.0 запущен")
     print(f"🌐 Откройте: http://{ip_addr}:{port}")
     print(f"⏹️  Ctrl+C для остановки\n")
     
     server = QuietHTTPServer((ip, port), Handler)
+    devices_announcer(port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -14710,7 +18145,7 @@ if [ "$1" = "--info" ]; then
     
     echo ""
     echo "══════════════════════════════════════════════════════════"
-    echo " Save Sync Diagnostics v1.5.0"
+    echo " Save Sync Diagnostics v1.6.0"
     echo " Система: $SYSTEM"
     echo "══════════════════════════════════════════════════════════"
     echo ""
@@ -15124,7 +18559,7 @@ migrate_to_app_dir() {
     if [ "$ok" != true ]; then
         rm -rf "${APP_DIR:?}"
         echo "❌ Не удалось перенести файлы (нет места?). Ничего не изменено, Save Sync работает как раньше."
-        [ "$WEB_STOPPED" = true ] && bash "$0" --web > /dev/null 2>&1 &
+        [ "$WEB_STOPPED" = true ] && web_detached
         return 1
     fi
     LEGACY_LAYOUT=false
@@ -15186,7 +18621,7 @@ uninstall_save_sync() {
     stop_web_server
     stop_sync >/dev/null 2>&1
     pkill -f "link_download\.py|download_roms\.sh|upload_roms\.sh" 2>/dev/null
-    rm -f "$SCRIPT_DIR/save-sync.sh" "/recalbox/share/userscripts/save-sync[endgame].sh" 2>/dev/null
+    rm -f "$SCRIPT_DIR/save-sync.sh" "/recalbox/share/userscripts/save-sync[endgame].sh" "/recalbox/share/userscripts/save-sync[rungame].sh" 2>/dev/null
     remove_autostart
     local KEEP_FILE=""
     if { [ "$KEEP_CONF" = "y" ] || [ "$KEEP_CONF" = "Y" ]; } && [ -f "$CONFIG_FILE" ]; then
@@ -15226,7 +18661,7 @@ if [ -f "$RCLONE_CONF" ] && [ -f "$DOWNLOAD_SCRIPT" ] && [ -f "$UPLOAD_SCRIPT" ]
     echo " Save Sync уже установлен ($SYSTEM)"
     echo "══════════════════════════════════════════════════════════"
     echo ""
-    echo " 1 - Обновить до v1.5.0"
+    echo " 1 - Обновить до v1.6.0"
     echo " 2 - Переустановить заново"
     echo " 3 - Удалить"
     echo " 4 - Выход"
@@ -15236,9 +18671,16 @@ if [ -f "$RCLONE_CONF" ] && [ -f "$DOWNLOAD_SCRIPT" ] && [ -f "$UPLOAD_SCRIPT" ]
     1)
         echo ""
         echo "══════════════════════════════════════════════════════════"
-        echo " 📦 Обновление до v1.5.0"
+        echo " 📦 Обновление до v1.6.0"
         echo "══════════════════════════════════════════════════════════"
         echo ""
+        # a sync running now (for example the one at power-on) is let to finish first: its
+        # scripts are rewritten below, and a script changed under a running bash breaks it
+        if sync_busy; then
+            echo "⏳ Идёт синхронизация - жду её окончания (до 3 мин)..."
+            for i in $(seq 1 180); do sync_busy || break; sleep 1; done
+            sync_busy && stop_sync >/dev/null 2>&1
+        fi
         migrate_to_app_dir || exit 1
 
         if [ ! -f "$CONFIG_FILE" ]; then
@@ -15322,9 +18764,9 @@ EOF
         fi
         
         echo ""
-        echo "✅ Обновление до v1.5.0 завершено!"
+        echo "✅ Обновление до v1.6.0 завершено!"
 
-        log_msg "Обновление до v1.5.0 завершено"
+        log_msg "Обновление до v1.6.0 завершено"
 
         restart_web_after_update
 
@@ -15375,10 +18817,17 @@ EOF
     2)
         # Переустановка - удаляем и устанавливаем заново
         echo "🗑️ Удаление старых файлов..."
+        # a sync running now (for example the one at power-on) is let to finish first: its
+        # scripts are rewritten below, and a script changed under a running bash breaks it
+        if sync_busy; then
+            echo "⏳ Идёт синхронизация - жду её окончания (до 3 мин)..."
+            for i in $(seq 1 180); do sync_busy || break; sleep 1; done
+            sync_busy && stop_sync >/dev/null 2>&1
+        fi
         migrate_to_app_dir || exit 1
         rm -f "$DOWNLOAD_SCRIPT" "$UPLOAD_SCRIPT" "$DOWNLOAD_ROMS" "$UPLOAD_ROMS" "$LINK_SCRIPT" 2>/dev/null
         rm -f "$SCRIPT_DIR/save-sync.sh" 2>/dev/null
-        rm -f "/recalbox/share/userscripts/save-sync[endgame].sh" 2>/dev/null
+        rm -f "/recalbox/share/userscripts/save-sync[endgame].sh" "/recalbox/share/userscripts/save-sync[rungame].sh" 2>/dev/null
         echo "✅ Старые файлы удалены"
         echo ""
         echo "Запуск установки..."
@@ -15405,7 +18854,7 @@ fi
 
 echo ""
 echo "══════════════════════════════════════════════════════════"
-echo " Save Sync v1.5.0 - Установка"
+echo " Save Sync v1.6.0 - Установка"
 echo " $SYSTEM"
 echo "══════════════════════════════════════════════════════════"
 echo ""
@@ -15540,7 +18989,7 @@ fi
 
 SYSTEM_VERSION=$(get_system_version)
 
-log_msg "Save Sync v1.5.0 | $SYSTEM ($SYSTEM_VERSION) | rclone v${NEW_VER:-unknown}"
+log_msg "Save Sync v1.6.0 | $SYSTEM ($SYSTEM_VERSION) | rclone v${NEW_VER:-unknown}"
 log_msg "Установка завершена"
 
 echo ""
