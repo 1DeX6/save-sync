@@ -79,7 +79,13 @@
 
 ![Веб-интерфейс](screenshots/web.png)
 
-![Вкладка «Ромы» в веб-интерфейсе](screenshots/web-rom.jpg)
+![](screenshots/save-back.png)
+
+![Вкладка «Ромы» в веб-интерфейсе](screenshots/roms.jpg)
+
+![](screenshots/roms-system.png)
+
+![](screenshots/roms-catalog.png)
 
 ![Центр управления](screenshots/control-panel.jpg)
 
@@ -420,7 +426,13 @@ At boot and on a manual run the sync is always full.
 
 ![Web interface](screenshots/web-en.png)
 
-![ROMs tab in the web interface](screenshots/web-rom-en.jpg)
+![Game saves in the web interface](screenshots/save-back-en.png)
+
+![ROMs tab in the web interface](screenshots/roms-en.jpg)
+
+![A system in the ROMs tab](screenshots/roms-system-en.png)
+
+![Game catalog](screenshots/roms-catalog-en.png)
 
 ![Control panel](screenshots/control-panel-en.jpg)
 
